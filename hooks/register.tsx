@@ -1,7 +1,37 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { DiaryFolder, GleisCommit, GleisDiary, GleisRef, GleisSnapshot, GleisView, GleisWorktree } from '../types'
+import type {
+  DiaryEntry,
+  DiaryFolder,
+  GleisCommit,
+  GleisDiary,
+  GleisRef,
+  GleisReleases,
+  GleisReleaseState,
+  GleisSnapshot,
+  GleisView,
+  GleisWorktree,
+  ProjectRepo,
+  ReleaseItem,
+} from '../types'
+import {
+  branchesForOtherRepos,
+  checkPrompt,
+  grepPattern,
+  guessRepos,
+  parseApiReleases,
+  parseApiRepoList,
+  parseCheckAnswer,
+  parseGhReleases,
+  parseGhRepoList,
+  parseRemotes,
+  pickEvidence,
+  remoteRepoNames,
+  sameRepo,
+  withRemotes,
+} from './ablagen'
+import type { OwnerRepo, Remote } from './ablagen'
 import {
   ICON_AMBER,
   ICON_BLUE,
@@ -33,6 +63,7 @@ import type { IconKind, RowEvent } from './graph'
 import {
   COL_ORD,
   COL_PC,
+  COL_REL,
   diaryEvents,
   ebenenModel,
   ebenenSlices,
@@ -41,6 +72,9 @@ import {
   parseDiary,
   parseMerges,
   parseTrack,
+  releaseEvents,
+  remoteLabel,
+  withReleases,
 } from './ebenen'
 import type { DiaryEvent, EbenenRow } from './ebenen'
 import { texts } from './i18n'
@@ -68,12 +102,13 @@ async function readTitle($: EngineInterface): Promise<string> {
 const GIT = ['git', '--no-optional-locks', '-c', 'core.quotepath=off', '-c', 'color.ui=never']
 
 // Neues Schild (shape), wenn sich der Aufbau eines gespeicherten Werts ändert.
-const snapshot = atom({ plugin: 'git-tracking', key: 'snapshot' } as const, null, { shape: 'snapshot-4' })
+const snapshot = atom({ plugin: 'git-tracking', key: 'snapshot' } as const, null, { shape: 'snapshot-5' })
 const view = atom(
   { plugin: 'git-tracking', key: 'view' } as const,
   // Voreingestellt: Drei Ebenen; der Gleisplan bleibt per Umschalter erreichbar
   { limit: 80, scope: 'all', folder: null, compact: true, mode: 'ebenen', events: 60 },
-  { shape: 'view-4' },
+  // view-5: die eigene Ansicht „releases“ aus 0.7.0 gibt es nicht mehr (jetzt Ebene in den Drei Ebenen)
+  { shape: 'view-5' },
 )
 const selected = atom({ plugin: 'git-tracking', key: 'selected' } as const, null, { shape: 'selected-3' })
 const draft = atom({ plugin: 'git-tracking', key: 'draft' } as const, '', { shape: 'draft-1' })
@@ -108,6 +143,8 @@ function emptySnapshot(folder: string, error: string | null): GleisSnapshot {
     mainBranch: null,
     branches: [],
     unmerged: [],
+    otherRepoBranches: {},
+    remoteNames: {},
     unpushed: [],
     unpulled: [],
     commits: [],
@@ -134,6 +171,7 @@ async function readDiary(
   remoteRefs: string[],
   hereDirty: number,
   mainBranch: string | null,
+  remoteNames: Record<string, string>,
 ): Promise<GleisDiary> {
   const list = wts.length > 0 ? wts.slice(0, 6) : [{ path: root, branch: null, head: '', isMain: true, isHere: true }]
   const hereIndex = Math.max(0, list.findIndex(w => w.isHere))
@@ -181,6 +219,7 @@ async function readDiary(
     if (log && log.exitCode === 0) entries = entries.concat(parseDiary(log.stdout, `folder:${i}`))
   })
   const times = lines(roots.stdout).map(Number).filter(n => n > 0)
+  const mergeOrigins = await readMergeOrigins(git, root, entries, branches, remoteNames)
   return {
     entries,
     folders,
@@ -195,7 +234,65 @@ async function readDiary(
             .filter(r => r.startsWith('refs/remotes/') && !r.endsWith('/HEAD'))
             .map(r => r.slice(13))
         : [],
+    remoteNames,
+    mergeOrigins,
   }
+}
+
+/** Übernommene Speicherstände je Bereich (vorher..nachher); Speicherstände ändern sich nie, also für die ganze Sitzung gemerkt */
+const mergedCommits = new Map<string, string[]>()
+/** Höchstens so viele Übernahmen aus gelöschten Zweigen werden nachgeschlagen (die neuesten) */
+const MAX_MERGE_ORIGINS = 12
+
+/**
+ * Übernahmen (merge) aus Zweigen, die es nicht mehr gibt: Wurden ihre Speicherstände aus einem der
+ * heutigen Ordner festgehalten? Jeder Ordner hält im eigenen Tagebuch „commit: …“ fest; steht ein
+ * übernommener Speicherstand in keinem davon, kam er aus einem Ordner, den es nicht mehr gibt.
+ */
+async function readMergeOrigins(
+  git: Git,
+  root: string,
+  entries: DiaryEntry[],
+  branches: string[],
+  remoteNames: Record<string, string>,
+): Promise<Record<string, 'all' | 'some'>> {
+  const local = new Set(branches)
+  const prefixes = ['origin/', ...Object.keys(remoteNames).map(r => `${r}/`)]
+  const committedHere = new Set(entries.filter(e => e.ref.startsWith('folder:') && /^(commit|cherry-pick)/.test(e.msg)).map(e => e.hash))
+  const byRef = new Map<string, DiaryEntry[]>()
+  for (const e of entries) {
+    if (!e.ref.startsWith('heads/')) continue
+    byRef.set(e.ref, [...(byRef.get(e.ref) ?? []), e])
+  }
+  const jobs: { hash: string; prev: string; time: number }[] = []
+  for (const list of byRef.values()) {
+    list.sort((a, b) => b.time - a.time)
+    list.forEach((en, k) => {
+      const m = /^merge (\S+): /.exec(en.msg)
+      const from = m?.[1]
+      const prev = list[k + 1]
+      if (!from || !prev || local.has(from) || /^[0-9a-f]{7,40}$/.test(from) || prefixes.some(p => from.startsWith(p))) return
+      jobs.push({ hash: en.hash, prev: prev.hash, time: en.time })
+    })
+  }
+  jobs.sort((a, b) => b.time - a.time)
+  const out: Record<string, 'all' | 'some'> = {}
+  await Promise.all(
+    jobs.slice(0, MAX_MERGE_ORIGINS).map(async j => {
+      const range = `${j.prev}..${j.hash}`
+      let commits = mergedCommits.get(range)
+      if (!commits) {
+        const r = await git(['rev-list', '--no-merges', '-n', '200', range], root).catch(() => null)
+        if (!r || r.exitCode !== 0) return
+        commits = lines(r.stdout)
+        mergedCommits.set(range, commits)
+      }
+      const inside = commits.filter(c => committedHere.has(c)).length
+      if (commits.length > 0 && inside === 0) out[j.hash] = 'all'
+      else if (inside < commits.length) out[j.hash] = 'some'
+    }),
+  )
+  return out
 }
 
 const lines = (s: string) =>
@@ -228,13 +325,15 @@ async function readGit($: EngineInterface): Promise<GleisSnapshot> {
   const surfaces: readonly string[] = await $.session.surfaces().catch(() => [])
   const wantText = surfaces.includes('terminal')
 
-  const [status, log, worktrees, stash, remotes, heads, ahead, behind, text] = await Promise.all([
+  const [status, log, worktrees, stash, remotes, remotesV, heads, ahead, behind, text] = await Promise.all([
     git(['status', '--porcelain=v2', '--branch'], root),
     git(['log', '--decorate=full', '--date-order', `-n${v.limit + 1}`, `--format=${LOG_FORMAT}`, ...range], root),
     git(['worktree', 'list', '--porcelain'], root),
     git(['stash', 'list', '--format=%h'], root),
     git(['remote'], root),
-    git(['for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes/origin'], root),
+    git(['remote', '-v'], root),
+    // Alle GitHub-Ablagen, nicht nur origin (z. B. eine öffentliche zweite Ablage)
+    git(['for-each-ref', '--format=%(refname)%09%(objectname)%09%(upstream)', 'refs/heads', 'refs/remotes'], root),
     // Nur hier (noch nicht hochgeladen) und nur bei GitHub (noch nicht abgeholt)
     git(['rev-list', '--max-count=500', '--branches', '--not', '--remotes'], root),
     git(['rev-list', '--max-count=500', '--remotes', '--not', '--branches'], root),
@@ -251,20 +350,29 @@ async function readGit($: EngineInterface): Promise<GleisSnapshot> {
   commits = addWorktreeRefs(commits, wts)
 
   // Hauptzweig und welche Zweige noch nicht zusammengeführt sind
-  const refNames = lines(heads.stdout)
+  const refRows = lines(heads.stdout).map(l => {
+    const [ref = '', obj = '', up = ''] = l.split('\t')
+    return { ref, obj, up }
+  })
+  const refNames = refRows.map(r => r.ref)
   const branches = refNames.filter(r => r.startsWith('refs/heads/')).map(r => r.slice(11))
   const remoteRefs = refNames.filter(r => r.startsWith('refs/remotes/')).map(r => r.slice(13))
   const mainBranch = pickMainBranch(branches, remoteRefs, st.branch)
+  const remoteNames = remotesV.exitCode === 0 ? remoteRepoNames(remotesV.stdout) : {}
+  const otherRepoBranches = branchesForOtherRepos(refRows, mainBranch, remoteNames)
   let unmerged: string[] = []
   if (mainBranch) {
     const target = branches.includes(mainBranch) ? `refs/heads/${mainBranch}` : `refs/remotes/origin/${mainBranch}`
     const nm = await git(['for-each-ref', '--format=%(refname)', `--no-merged=${target}`, 'refs/heads'], root)
-    if (nm.exitCode === 0) unmerged = lines(nm.stdout).map(r => r.replace(/^refs\/heads\//, ''))
+    // Ein Zweig für eine andere Ablage wird absichtlich nie zusammengeführt
+    if (nm.exitCode === 0) unmerged = lines(nm.stdout).map(r => r.replace(/^refs\/heads\//, '')).filter(b => !otherRepoBranches[b])
   }
 
   const remoteList = lines(remotes.stdout)
   const diary =
-    v.mode === 'ebenen' ? await readDiary(git, root, wts, branches, remoteRefs, st.changed + st.untracked, mainBranch) : null
+    v.mode === 'ebenen'
+      ? await readDiary(git, root, wts, branches, remoteRefs, st.changed + st.untracked, mainBranch, remoteNames)
+      : null
   return {
     folder,
     root,
@@ -283,6 +391,8 @@ async function readGit($: EngineInterface): Promise<GleisSnapshot> {
     mainBranch,
     branches,
     unmerged,
+    otherRepoBranches,
+    remoteNames,
     // Ohne GitHub-Ablage liegt alles nur hier; das sagt schon der Kopf, also keine Markierung je Speicherstand
     unpushed: remoteList.length > 0 && ahead.exitCode === 0 ? lines(ahead.stdout) : [],
     unpulled: behind.exitCode === 0 ? lines(behind.stdout) : [],
@@ -335,6 +445,7 @@ const toggleCompact = (x: GleisView): GleisView => ({ ...x, compact: !x.compact 
 async function setMode($: EngineInterface, mode: GleisView['mode']): Promise<void> {
   await update($, view, x => ({ ...x, mode }))
   await refresh($)
+  if (mode === 'ebenen') void loadReleases($)
 }
 
 /** Die Sprache des Systems: unter Windows die Oberflächensprache, sonst LANG */
@@ -501,8 +612,239 @@ async function showFolder($: EngineInterface, folder: string | null, tellClaude:
   await update($, selected, () => null)
   await rememberFolder($, cwd, next)
   const same = before === next || (before !== null && next !== null && samePath(before, next))
-  const [, told] = await Promise.all([refresh($), same || !tellClaude ? Promise.resolve(null) : handBrief($, 'switched')])
+  const [, told] = await Promise.all([
+    refresh($).then(() => releasesIfShown($)),
+    same || !tellClaude ? Promise.resolve(null) : handBrief($, 'switched'),
+  ])
   return told && typeof told === 'object' ? told.project : null
+}
+
+// ---------------------------------------------------------------- Veröffentlichungen und Betas
+
+const releases = atom(
+  { plugin: 'git-tracking', key: 'releases' } as const,
+  { data: null, busy: null, error: null } as GleisReleaseState,
+  { shape: 'releases-1' },
+)
+/** Unter diesem Schlüssel merkt sich das Plugin Claudes Prüfung je Projekt (owner/repo der Haupt-Ablage) */
+const CHECKED_KEY = 'checkedRepos'
+/** So lange gelten gelesene Veröffentlichungen als frisch (danach liest das Plugin von selbst neu) */
+const RELEASES_FRESH_MS = 15 * 60_000
+/** So viele Ablagen je Projekt werden höchstens gelesen */
+const MAX_REPOS = 8
+/** Allgemeiner Name gegenüber GitHub, ohne Angaben zum Nutzer */
+const GH_HEADERS = { Accept: 'application/vnd.github+json', 'User-Agent': 'git-tracking-plugin' }
+
+type Checked = { repos: ProjectRepo[]; seen: string[]; at: number }
+type Fetched = { ok: true; out: string } | { ok: false; reason: string }
+
+let releasesRun: Promise<void> | null = null
+let releasesAgain: { check: boolean } | null = null
+/** null = noch nicht versucht, false = gh fehlt (dann nur die öffentliche GitHub-Schnittstelle) */
+let ghWorks: boolean | null = null
+const ownerCache = new Map<string, { at: number; list: OwnerRepo[] | null }>()
+
+async function checkedAll($: EngineInterface): Promise<Record<string, Checked>> {
+  const v = await $.store.get(CHECKED_KEY).catch(() => undefined)
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
+  const out: Record<string, Checked> = {}
+  for (const [k, c] of Object.entries(v as Record<string, unknown>)) {
+    const x = c as Partial<Checked> | null
+    if (x && Array.isArray(x.repos) && typeof x.at === 'number') {
+      out[k] = { repos: x.repos, seen: Array.isArray(x.seen) ? x.seen.filter(s => typeof s === 'string') : [], at: x.at }
+    }
+  }
+  return out
+}
+
+async function saveChecked($: EngineInterface, key: string, c: Checked): Promise<void> {
+  const all = await checkedAll($)
+  all[key.toLowerCase()] = c
+  await $.store.set(CHECKED_KEY, all).catch(() => undefined)
+}
+
+const firstLine = (s: string) => s.replace(/\r/g, '').split('\n').map(x => x.trim()).find(Boolean) ?? ''
+
+/** gh, wenn es da ist (kennt auch private Ablagen); null = gh fehlt */
+async function runGh($: EngineInterface, args: string[]): Promise<Fetched | null> {
+  if (ghWorks === false) return null
+  try {
+    const r = await $.process.run(['gh', ...args], { timeoutMs: 30_000 })
+    ghWorks = true
+    if (r.exitCode === 0) return { ok: true, out: r.stdout }
+    const err = firstLine(r.stderr)
+    return { ok: false, reason: /not found|could not resolve/i.test(err) ? 'not-found' : err || `gh ${r.exitCode}` }
+  } catch {
+    ghWorks = false
+    return null
+  }
+}
+
+/** Die öffentliche GitHub-Schnittstelle, ohne Anmeldung (nur öffentliche Ablagen) */
+async function fetchApi($: EngineInterface, path: string): Promise<Fetched> {
+  try {
+    const r = await $.http.fetch(`https://api.github.com${path}`, { headers: GH_HEADERS })
+    if (r.ok) return { ok: true, out: r.text }
+    return {
+      ok: false,
+      reason: r.status === 404 ? 'not-found' : r.status === 403 || r.status === 429 ? 'rate-limit' : `HTTP ${r.status}`,
+    }
+  } catch {
+    return { ok: false, reason: 'offline' }
+  }
+}
+
+/** Die Ablagen eines Besitzers bei GitHub (für die Vermutung nach Namen), 15 Minuten zwischengespeichert */
+async function ownerRepos($: EngineInterface, owner: string, now: number, fresh: boolean): Promise<OwnerRepo[] | null> {
+  const c = ownerCache.get(owner.toLowerCase())
+  if (c && !fresh && now - c.at < RELEASES_FRESH_MS) return c.list
+  let list: OwnerRepo[] | null = null
+  const gh = await runGh($, ['repo', 'list', owner, '--limit', '300', '--json', 'name,description,visibility,isArchived'])
+  if (gh?.ok) list = parseGhRepoList(gh.out)
+  if (!list) {
+    const api = await fetchApi($, `/users/${encodeURIComponent(owner)}/repos?per_page=100&sort=pushed`)
+    if (api.ok) list = parseApiRepoList(api.out)
+  }
+  ownerCache.set(owner.toLowerCase(), { at: now, list })
+  return list
+}
+
+async function repoReleases($: EngineInterface, repo: ProjectRepo): Promise<{ items: ReleaseItem[] } | { reason: string }> {
+  const gh = await runGh($, ['release', 'list', '-R', repo.name, '--limit', '100', '--json', 'tagName,name,isPrerelease,isDraft,publishedAt,createdAt'])
+  if (gh?.ok) {
+    const items = parseGhReleases(gh.out, repo.name, repo.role)
+    if (items) return { items }
+  }
+  if (gh && !gh.ok && gh.reason === 'not-found') return { reason: 'not-found' }
+  const api = await fetchApi($, `/repos/${repo.name}/releases?per_page=100`)
+  if (api.ok) {
+    const items = parseApiReleases(api.out, repo.name, repo.role)
+    if (items) return { items }
+    return { reason: 'unreadable' }
+  }
+  return { reason: api.reason }
+}
+
+/** Zeilen aus den Projektdateien, die Ablagen des Besitzers nennen (nur festgehaltene Dateien, nur lesend) */
+async function evidence($: EngineInterface, root: string, owner: string): Promise<string[]> {
+  const r = await $.process
+    .run([...GIT, 'grep', '-n', '-I', '-i', '-E', '-e', grepPattern(owner)], { cwd: root, timeoutMs: 60_000 })
+    .catch(() => null)
+  return r && r.exitCode === 0 ? pickEvidence(r.stdout) : []
+}
+
+/** Fragt Claude (kleines Modell, im Hintergrund, nichts im Chat), welche Ablagen dazugehören */
+async function askClaude(
+  $: EngineInterface,
+  root: string,
+  remotes: Remote[],
+  candidates: ProjectRepo[],
+  t: Texts,
+): Promise<{ repos: ProjectRepo[] } | { error: string }> {
+  const owner = remotes[0]!.name.split('/')[0]!
+  const lines = await evidence($, root, owner)
+  const { system, prompt } = checkPrompt({ project: baseName(root), remotes, candidates, evidence: lines, lang: t.lang })
+  let r: Awaited<ReturnType<EngineInterface['model']['complete']>>
+  try {
+    r = await $.model.complete({ model: 'haiku', system, prompt, maxTokens: 1500, timeoutMs: 90_000 })
+  } catch (err) {
+    return { error: t.rel.claudeFailed(firstLine(String(err)) || 'refused') }
+  }
+  if (!r.isAnswered) {
+    const status = 'status' in r && typeof r.status === 'number' ? ` ${r.status}` : ''
+    return { error: t.rel.claudeFailed(t.rel.reason(String(r.reason)) + status) }
+  }
+  const repos = parseCheckAnswer(r.text)
+  return repos ? { repos } : { error: t.rel.claudeUnclear }
+}
+
+/**
+ * Liest die Ablagen und Veröffentlichungen des gezeigten Projekts. Ohne `check` nur, wenn
+ * nichts Frisches da ist; `check` (Knopf „Projekt aktualisieren“) fragt vorher Claude.
+ * Läuft nie doppelt: Ein Knopfdruck während des Lesens läuft danach.
+ */
+function loadReleases($: EngineInterface, opt: { force?: boolean; check?: boolean } = {}): Promise<void> {
+  if (releasesRun) {
+    if (opt.force || opt.check) releasesAgain = { check: !!opt.check || !!releasesAgain?.check }
+    return releasesRun
+  }
+  releasesRun = (async () => {
+    let cur: { force?: boolean; check?: boolean } | null = opt
+    try {
+      while (cur) {
+        releasesAgain = null
+        await readReleases($, cur)
+        // Während des Lesens kann ein Knopfdruck releasesAgain gesetzt haben
+        const pending = releasesAgain as { check: boolean } | null
+        cur = pending ? { force: true, check: pending.check } : null
+      }
+    } catch (err) {
+      $.ui.log(`git-tracking: ${String(err)}`, { to: 'debug' })
+      await update($, releases, s => ({ ...s, busy: null, error: String(err) }))
+    } finally {
+      releasesRun = null
+    }
+  })()
+  return releasesRun
+}
+
+async function releasesIfShown($: EngineInterface): Promise<void> {
+  // Die Ebene „Veröffentlicht“ gehört zur Drei-Ebenen-Ansicht
+  if ((await read($, view)).mode === 'ebenen') await loadReleases($)
+}
+
+async function readReleases($: EngineInterface, opt: { force?: boolean; check?: boolean }): Promise<void> {
+  const snap = await read($, snapshot)
+  const root = snap?.root
+  if (!root) return
+  const now = await $.clock.now()
+  const cur = await read($, releases)
+  const rv = await $.process.run([...GIT, 'remote', '-v'], { cwd: root, timeoutMs: 20_000 }).catch(() => null)
+  const remotes = rv && rv.exitCode === 0 ? parseRemotes(rv.stdout) : []
+  const main = remotes[0]
+  if (!main) {
+    await update($, releases, () => ({ data: null, busy: null, error: 'no-github' }))
+    return
+  }
+  const key = main.name
+  const same = !!cur.data && sameRepo(cur.data.key, key) && samePath(cur.data.root, root)
+  if (!opt.force && !opt.check && same && now - cur.data!.fetchedAt < RELEASES_FRESH_MS) return
+  const t = texts(await read($, lang))
+  await update($, releases, (s): GleisReleaseState => ({
+    data: same ? s.data : null,
+    busy: opt.check ? 'checking' : 'loading',
+    error: null,
+  }))
+
+  const owned = await ownerRepos($, key.split('/')[0]!, now, !!opt.force)
+  const guess = guessRepos(remotes, owned)
+  let stored: Checked | null = (await checkedAll($))[key.toLowerCase()] ?? null
+  let error: string | null = null
+  if (opt.check) {
+    const res = await askClaude($, root, remotes, guess, t)
+    if ('repos' in res) {
+      stored = { repos: withRemotes(res.repos, remotes), seen: guess.map(g => g.name), at: now }
+      await saveChecked($, key, stored)
+    } else {
+      error = res.error
+    }
+    await update($, releases, (s): GleisReleaseState => ({ ...s, busy: 'loading' }))
+  }
+  const repos = stored ? withRemotes(stored.repos, remotes) : guess
+  const known = (n: string) => repos.some(r => sameRepo(r.name, n)) || (stored?.seen ?? []).some(s => sameRepo(s, n))
+  const newRepos = stored ? guess.filter(g => !known(g.name)).map(g => g.name) : []
+
+  const results = await Promise.all(repos.slice(0, MAX_REPOS).map(r => repoReleases($, r)))
+  const items: ReleaseItem[] = []
+  const failed: GleisReleases['failed'] = []
+  results.forEach((res, i) => {
+    if ('items' in res) items.push(...res.items)
+    else failed.push({ repo: repos[i]!.name, reason: res.reason })
+  })
+  items.sort((a, b) => b.time - a.time)
+  const data: GleisReleases = { key, root, repos, checkedAt: stored?.at ?? null, newRepos, items, failed, fetchedAt: now }
+  await update($, releases, () => ({ data, busy: null, error }))
+  if (opt.check && !error) $.ui.toast(t.rel.updatedToast(repos.length))
 }
 
 let picking = false
@@ -570,7 +912,7 @@ function pillsFor(
           fg: '#ffffff',
         }
       case 'remote': {
-        const name = r.name.startsWith('origin/') ? r.name.slice(7) : r.name
+        const name = remoteLabel(r.name, snap.remoteNames, snap.mainBranch)
         return { label: t.atGitHub(name, r.name === snap.upstream ? snap.ahead : 0), fg: 'suggestion' }
       }
       case 'tag':
@@ -684,9 +1026,11 @@ export const register: Register = (on, options) => {
     // Ohne angeschlossene Oberfläche (z. B. claude -p) lehnt ui.open ab – dann eben kein Fenster.
     void refresh($)
       .then(() => $.ui.open({ id: PANE, title: paneTitle }))
+      .then(() => releasesIfShown($))
       .catch(() => undefined)
+    // Alle 10 s den Git-Stand; Veröffentlichungen nur, wenn sie gezeigt werden und älter als 15 Minuten sind
     $.clock.every(EVERY_MS, () => {
-      void paneShown($).then(shown => (shown ? refresh($) : undefined))
+      void paneShown($).then(shown => (shown ? refresh($).then(() => releasesIfShown($)) : undefined))
     })
 
     return next(e)
@@ -817,10 +1161,17 @@ export const register: Register = (on, options) => {
         : t.noCommitYet
     const main = snap.mainBranch ?? 'main'
     const sideBranches = snap.branches.filter(b => b !== main)
+    // Zweige für eine andere GitHub-Ablage (z. B. „oeffentlich“ → git-tracking) zählen nicht als offen
+    const forOther = sideBranches.filter(b => snap.otherRepoBranches[b])
+    const ownSide = sideBranches.filter(b => !snap.otherRepoBranches[b])
+    const otherPart =
+      forOther.length > 0 ? t.otherRepoTracks(forOther.length, [...new Set(forOther.map(b => snap.otherRepoBranches[b]!))].join(', ')) : ''
     const trackLine =
-      sideBranches.length === 0
-        ? t.oneTrack(main)
-        : t.tracks(main, sideBranches.length, snap.unmerged.length)
+      ownSide.length === 0
+        ? otherPart
+          ? t.mainWith(main, otherPart)
+          : t.oneTrack(main)
+        : t.tracks(main, ownSide.length, snap.unmerged.length) + (otherPart ? ` · ${otherPart}` : '')
     const header = (
       <Box flexDirection="column">
         <Text>
@@ -870,7 +1221,11 @@ export const register: Register = (on, options) => {
     const otherFolder = v.folder !== null
     const makeButtons = (moreEbenen: boolean) => (
       <Box flexDirection="row" gap={1} flexWrap="wrap">
-        <Button key="reload" label={t.reload} onPress={() => void refresh($)} />
+        <Button
+          key="reload"
+          label={t.reload}
+          onPress={() => void refresh($).then(() => (v.mode === 'ebenen' ? loadReleases($, { force: true }) : undefined))}
+        />
         <Button
           key="compact"
           label={
@@ -1094,7 +1449,10 @@ export const register: Register = (on, options) => {
           </Box>
         )
       }
-      const evs = diaryEvents(diary, snap.branches)
+      // Vierte Ebene: Veröffentlichungen und Betas aus den GitHub-Ablagen des Projekts, nach Zeit einsortiert
+      const rs = await read($, releases)
+      const relData = rs.data && samePath(rs.data.root, root) ? rs.data : null
+      const evs = withReleases(diaryEvents(diary, snap.branches), relData ? releaseEvents(relData.items) : [])
       const model = ebenenModel(evs, diary, {
         mainBranch: snap.mainBranch,
         branches: snap.branches,
@@ -1239,7 +1597,7 @@ export const register: Register = (on, options) => {
           return
         }
         const ev: DiaryEvent = row.ev
-        const { title, detail } = eventLines(ev, folderName, snap.mainBranch, t)
+        const { title, detail } = eventLines(ev, folderName, snap.mainBranch, t, diary.remoteNames)
         const marks: RowEvent[] = []
         const about = detail ? `${title} – ${detail}` : title
         if (ev.kind === 'merge') marks.push({ icon: 'merge', color: ICON_GREY, text: about })
@@ -1251,9 +1609,16 @@ export const register: Register = (on, options) => {
             {slice}
             {symbols(`zeichen-e${i}`, marks)}
             <Box flexDirection="column">
-              <Button key={`ereignis-${i}`} plain onPress={() => void selectCommit($, root, ev.hash, t, eventKey(ev))}>
-                {shorten(title, textCols)}
-              </Button>
+              {ev.kind === 'release' ? (
+                // Eine Veröffentlichung hat keinen eigenen Speicherstand zum Aufklappen
+                <Text key={`ereignis-${i}`} color={COL_REL} wrap="truncate-end">
+                  {shorten(title, textCols)}
+                </Text>
+              ) : (
+                <Button key={`ereignis-${i}`} plain onPress={() => void selectCommit($, root, ev.hash, t, eventKey(ev))}>
+                  {shorten(title, textCols)}
+                </Button>
+              )}
               <Text dimColor size="caption" wrap="truncate-end">
                 {shorten(detail ? `${date} · ${detail}` : date, Math.round(textCols * 1.15))}
               </Text>
@@ -1294,6 +1659,14 @@ export const register: Register = (on, options) => {
             </Text>
             <Text dimColor>{t.arrowGreen}</Text>
           </Text>
+          {model.lanes.some(l => l.col === 3) && (
+            <Text size="caption" wrap="wrap">
+              <Text color={COL_REL} weight="bold">
+                {'◀···● '}
+              </Text>
+              <Text dimColor>{t.rel.legend}</Text>
+            </Text>
+          )}
           {iconLegend.slice(0, 3).map(l => (
             <Box flexDirection="row" gap={1} alignItems="center">
               {icon(l.kind, l.color, 15)}
@@ -1309,6 +1682,47 @@ export const register: Register = (on, options) => {
         </Box>
       )
 
+      // Unter der Ansicht: welche GitHub-Ablagen dazugehören, und der Knopf, der Claude fragt
+      const r = t.rel
+      const busyText = rs.busy === 'checking' ? r.checking : rs.busy === 'loading' ? r.loading : null
+      const ablagen =
+        relData || (busyText && rs.error !== 'no-github') ? (
+          <Box key="ablagen" flexDirection="column">
+            {relData && (
+              <Text size="caption" wrap="wrap">
+                <Text dimColor>{`${r.reposTitle}: `}</Text>
+                {relData.repos.map(x => `${x.name.slice(x.name.indexOf('/') + 1)} (${r.role[x.role]})`).join(', ')}
+              </Text>
+            )}
+            {relData && (
+              <Text dimColor size="caption" wrap="wrap">
+                {relData.checkedAt !== null ? r.checked(ago(Math.floor(relData.checkedAt / 1000), now, t)) : r.guessed}
+              </Text>
+            )}
+            {relData?.newRepos.length ? (
+              <Text color="warning" size="caption" wrap="wrap">
+                {r.newRepos(relData.newRepos)}
+              </Text>
+            ) : null}
+            {relData?.failed.map(f => (
+              <Text color="warning" size="caption" wrap="wrap">
+                {r.failedRepo(f.repo, r.reason(f.reason))}
+              </Text>
+            ))}
+            {busyText && (
+              <Text dimColor size="caption" wrap="wrap">
+                {busyText}
+              </Text>
+            )}
+            {rs.error && rs.error !== 'no-github' && (
+              <Text color="warning" size="caption" wrap="wrap">
+                {rs.error}
+              </Text>
+            )}
+          </Box>
+        ) : null
+      const ebenenButtons = makeButtons(model.hasMore)
+
       return (
         <Box flexDirection="column" gap={1}>
           {header}
@@ -1318,7 +1732,22 @@ export const register: Register = (on, options) => {
             {out}
           </Box>
           {ebenenLegend}
-          {makeButtons(model.hasMore)}
+          {ablagen}
+          {relData ? (
+            <Box flexDirection="row" gap={1} flexWrap="wrap">
+              {ebenenButtons}
+              <Button
+                key="projekt-aktualisieren"
+                label={r.update}
+                onPress={() => {
+                  if (rs.busy === 'checking') $.ui.toast(r.busy)
+                  else void loadReleases($, { check: true, force: true })
+                }}
+              />
+            </Box>
+          ) : (
+            ebenenButtons
+          )}
         </Box>
       )
     }

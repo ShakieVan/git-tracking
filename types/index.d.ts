@@ -55,8 +55,15 @@ export type GleisSnapshot = {
   mainBranch: string | null
   /** Alle lokalen Entwicklungszweige */
   branches: string[]
-  /** Lokale Zweige, die noch nicht in den Hauptzweig zusammengeführt sind */
+  /** Lokale Zweige, die noch nicht in den Hauptzweig zusammengeführt sind (ohne die für andere Ablagen) */
   unmerged: string[]
+  /**
+   * Lokale Zweige, die in eine andere GitHub-Ablage als origin hochgeladen werden (z. B. „oeffentlich“
+   * → git-tracking): Zweig → Name dieser Ablage. Sie werden nie in den Hauptzweig zusammengeführt.
+   */
+  otherRepoBranches: Record<string, string>
+  /** GitHub-Ablage je Gegenstelle, z. B. { origin: 'meine-sachen', oeffentlich: 'git-tracking' } */
+  remoteNames: Record<string, string>
   /** Speicherstände, die nur auf diesem PC liegen (noch nicht hochgeladen), höchstens 500 */
   unpushed: string[]
   /** Speicherstände, die nur bei GitHub liegen (noch nicht abgeholt), höchstens 500 */
@@ -129,6 +136,14 @@ export type GleisDiary = {
   remoteMerges: DiaryMerge[]
   /** GitHub-Zweige, die noch nicht in mainRemote zusammengeführt sind, z. B. origin/x */
   unmergedRemote: string[]
+  /** GitHub-Ablage je Gegenstelle (wie GleisSnapshot.remoteNames), für die Spurnamen anderer Ablagen */
+  remoteNames: Record<string, string>
+  /**
+   * Übernahmen (merge) aus Zweigen, die es nicht mehr gibt: Speicherstand der Übernahme → wurden die
+   * übernommenen Speicherstände aus keinem heutigen Ordner festgehalten (all) oder nur teils (some)?
+   * Fehlt ein Eintrag, wurden sie aus einem heutigen Ordner festgehalten (oder es ist unbekannt).
+   */
+  mergeOrigins?: Record<string, 'all' | 'some'>
 }
 
 export type GleisView = {
@@ -140,7 +155,10 @@ export type GleisView = {
   folder: string | null
   /** true = nur Haltepunkte (gerade Strecken zusammengefasst), false = jeden Speicherstand zeigen */
   compact: boolean
-  /** plan = Gleisplan (Speicherstände), ebenen = Drei Ebenen (GitHub, PC, Ordner) aus dem Tagebuch */
+  /**
+   * plan = Gleisplan (Speicherstände), ebenen = Drei Ebenen (GitHub, PC, Ordner) aus dem Tagebuch,
+   * dazu die Ebene „Veröffentlicht“, wenn das Projekt Veröffentlichungen bei GitHub hat
+   */
   mode: 'plan' | 'ebenen'
   /** Wie viele Tagebuch-Ereignisse die Drei-Ebenen-Ansicht zeigt */
   events: number
@@ -166,6 +184,61 @@ export type GleisSelection = {
   time: number
 }
 
+/** Wofür das Projekt eine GitHub-Ablage nutzt */
+export type RepoRole = 'code' | 'release' | 'beta' | 'other'
+
+/** Eine GitHub-Ablage, die zum Projekt gehört */
+export type ProjectRepo = {
+  /** owner/repo */
+  name: string
+  /** code = Quellcode wird hochgeladen, release = fertige Versionen, beta = Testversionen, other = gehört sonst dazu */
+  role: RepoRole
+  /** git = Gegenstelle in Git, name = aus dem Namen vermutet, claude = von Claude geprüft */
+  source: 'git' | 'name' | 'claude'
+  /** Kurze Begründung (von Claude) oder die Beschreibung bei GitHub */
+  why: string
+}
+
+/** release = fertige Version, beta = Vorabversion oder aus einer Beta-Ablage, draft = Entwurf (nie veröffentlicht) */
+export type ReleaseKind = 'release' | 'beta' | 'draft'
+
+/** Eine Veröffentlichung (GitHub release) */
+export type ReleaseItem = {
+  /** owner/repo, in dem sie liegt */
+  repo: string
+  tag: string
+  title: string
+  kind: ReleaseKind
+  /** Sekunden seit 1970; beim Entwurf das Anlegedatum, 0 = unbekannt */
+  time: number
+}
+
+export type GleisReleases = {
+  /** owner/repo der Haupt-Ablage (origin): unter diesem Schlüssel merkt sich das Plugin Claudes Prüfung */
+  key: string
+  /** Oberster Ordner der Ablage, für die gelesen wurde */
+  root: string
+  repos: ProjectRepo[]
+  /** Wann Claude die Ablagen zuletzt geprüft hat (ms seit 1970); null = nur vermutet */
+  checkedAt: number | null
+  /** Ablagen mit passendem Namen, die bei der letzten Prüfung noch nicht da waren */
+  newRepos: string[]
+  /** Neueste zuerst */
+  items: ReleaseItem[]
+  /** Ablagen, deren Veröffentlichungen nicht gelesen werden konnten */
+  failed: { repo: string; reason: string }[]
+  /** ms seit 1970 */
+  fetchedAt: number
+}
+
+export type GleisReleaseState = {
+  data: GleisReleases | null
+  /** loading = liest von GitHub, checking = Claude prüft gerade die Ablagen */
+  busy: 'loading' | 'checking' | null
+  /** no-github = keine GitHub-Ablage; sonst ein Text zum Anzeigen */
+  error: string | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'git-tracking': {
@@ -176,6 +249,8 @@ declare module 'claude-code' {
       draft: Shaped<string>
       /** Sprache der Anzeige */
       lang: Shaped<'de' | 'en'>
+      /** Veröffentlichungen und Betas des gezeigten Projekts */
+      releases: Shaped<GleisReleaseState>
     }
   }
 }

@@ -2,9 +2,11 @@
  * Drei-Ebenen-Ansicht: GitHub | Ablage auf dem PC | Ordner, Zeit nach oben.
  * Grundlage ist das Git-Tagebuch (reflog): Es hält fest, wann festgehalten,
  * hochgeladen, abgeholt, umgeschaltet oder zurückgesetzt wurde – auf diesem PC,
- * meist für die letzten etwa 90 Tage. Reine Logik, kein `$`.
+ * meist für die letzten etwa 90 Tage. Hat das Projekt Veröffentlichungen bei GitHub,
+ * kommt links eine vierte Ebene „Veröffentlicht“ dazu (eine Spur je Ablage).
+ * Reine Logik, kein `$`.
  */
-import type { DiaryEntry, DiaryFolder, DiaryMerge, DiaryTrack, GleisDiary } from '../types'
+import type { DiaryEntry, DiaryFolder, DiaryMerge, DiaryTrack, GleisDiary, ReleaseItem } from '../types'
 import { iconBody, parseMergeSubject } from './graph'
 import type { IconKind } from './graph'
 import type { Texts } from './i18n'
@@ -85,6 +87,10 @@ export type EventKind =
   | 'fetch'
   /** Bei GitHub (Änderungsvorschlag) oder auf einem anderen Rechner zusammengeführt; erst nach dem Abholen bekannt */
   | 'remotemerge'
+  /** Veröffentlichung oder Beta bei GitHub (nicht aus dem Tagebuch, sondern aus den GitHub-Ablagen) */
+  | 'release'
+  /** Ein Ordner als eigener Zweig herausgelöst (git subtree split), z. B. für eine öffentliche Ablage */
+  | 'split'
   | 'other'
 
 type Classified = { kind: EventKind; subject: string; from?: string; to?: string; initial?: boolean }
@@ -111,6 +117,8 @@ export function classify(msg: string, isRemote: boolean): Classified | null {
   if (/^rebase/.test(msg)) return null
   if ((r = /^branch: Created from (.+)$/.exec(msg))) return { kind: 'create', subject: '', from: r[1]! }
   if (/^branch: renamed/i.test(msg)) return null
+  if ((r = /^branch: Reset to (.+)$/.exec(msg))) return { kind: 'reset', subject: '', to: r[1]! }
+  if (/^subtree split/.test(msg)) return { kind: 'split', subject: '' }
   if (/^clone/.test(msg)) return { kind: 'clone', subject: '' }
   return { kind: 'other', subject: msg }
 }
@@ -138,6 +146,30 @@ export type DiaryEvent = {
   pr: number | null
   /** Zusammenführen auf der GitHub-Webseite (nicht auf einem anderen Rechner) */
   onGitHub: boolean
+  /** Veröffentlichung: in welcher Ablage, welches Versionsschild, ob Beta; sonst null */
+  release: { repo: string; tag: string; beta: boolean } | null
+  /**
+   * Übernommen aus einem Zweig, den es nicht mehr gibt (aufgeräumt); `outside`: die übernommenen
+   * Speicherstände wurden aus keinem heutigen Ordner festgehalten (all) oder nur teils (some). Sonst null.
+   */
+  goneFrom: { outside: 'all' | 'some' | null } | null
+}
+
+/** Die Spur einer Ablage in der Ebene „Veröffentlicht“ */
+export const releaseLane = (repo: string) => `v:${repo}`
+
+/**
+ * Anzeigename eines GitHub-Zweigs: bei origin der Zweigname (main), bei einer anderen Ablage
+ * deren Name (git-tracking), mit dem Zweig dahinter, wenn es nicht ihr Hauptzweig ist.
+ */
+export function remoteLabel(r: string, remoteNames: Record<string, string> | undefined, main: string | null): string {
+  const i = r.indexOf('/')
+  if (i < 0) return r
+  const remote = r.slice(0, i)
+  const branch = r.slice(i + 1)
+  if (remote === 'origin') return branch
+  const repo = remoteNames?.[remote] ?? remote
+  return branch === main || branch === 'main' || branch === 'master' ? repo : `${repo}/${branch}`
 }
 
 /** Bei GitHub zusammengeführt: der Zweig, mit GitHub-Ablage davor (origin/x), wenn dieser PC ihn noch kennt */
@@ -154,7 +186,8 @@ function remoteSource(ev: DiaryEvent): { name: string; lane: string | null } | n
  * allein reicht nicht: Abzweigen, Umschalten, Abholen usw. zeigen oft auf denselben.
  */
 export function eventKey(ev: DiaryEvent): string {
-  return [ev.kind, ev.time, ev.hash, ev.branch ?? '', ev.remote ?? '', ev.folder ?? ''].join('|')
+  const rel = ev.release ? [ev.release.repo, ev.release.tag] : []
+  return [ev.kind, ev.time, ev.hash, ev.branch ?? '', ev.remote ?? '', ev.folder ?? '', ...rel].join('|')
 }
 
 const isHash = (s: string) => /^[0-9a-f]{7,40}$/.test(s)
@@ -175,6 +208,8 @@ function mk(c: Classified, en: DiaryEntry, part: Partial<DiaryEvent>): DiaryEven
     pushed: null,
     pr: null,
     onGitHub: false,
+    release: null,
+    goneFrom: null,
     ...part,
   }
 }
@@ -230,9 +265,39 @@ export function remoteMergeEvents(diary: GleisDiary): DiaryEvent[] {
       pr: pr ? Number(pr[1]) : null,
       // Der Text lässt sich beim Zusammenführen ändern, der Ersteller nicht
       onGitHub: !!pr || m.committer.toLowerCase() === GITHUB_COMMITTER,
+      release: null,
+      goneFrom: null,
     })
   }
   return out
+}
+
+/** Veröffentlichungen und Betas als Zeilen der Ebene „Veröffentlicht“; Entwürfe (nie veröffentlicht) fehlen */
+export function releaseEvents(items: ReleaseItem[]): DiaryEvent[] {
+  return items
+    .filter(i => i.kind !== 'draft' && i.time > 0)
+    .map(i => ({
+      kind: 'release' as const,
+      time: i.time,
+      hash: '',
+      subject: i.title,
+      initial: false,
+      branch: null,
+      remote: null,
+      folder: null,
+      from: null,
+      creates: [],
+      pushed: null,
+      pr: null,
+      onGitHub: false,
+      release: { repo: i.repo, tag: i.tag, beta: i.kind === 'beta' },
+      goneFrom: null,
+    }))
+}
+
+/** Sortiert Veröffentlichungen nach Zeit zwischen die Tagebuch-Ereignisse (neueste zuerst) */
+export function withReleases(events: DiaryEvent[], releases: DiaryEvent[]): DiaryEvent[] {
+  return releases.length === 0 ? events : [...events, ...releases].sort((a, b) => b.time - a.time)
 }
 
 /** Macht aus allen Tagebüchern eine Liste von Ereignissen, neueste zuerst */
@@ -250,6 +315,10 @@ export function diaryEvents(diary: GleisDiary, branches: string[]): DiaryEvent[]
   const fromBranches: DiaryEvent[] = []
   const remoteClones: DiaryEvent[] = []
 
+  // Ein Name wie origin/x oder oeffentlich/main ist ein GitHub-Zweig, kein lokaler
+  const remotePrefixes = ['origin/', ...Object.keys(diary.remoteNames ?? {}).map(r => `${r}/`)]
+  const isRemoteName = (x: string) => remotePrefixes.some(p => x.startsWith(p))
+
   // 1. Zweige auf dem PC
   for (const [ref, list] of byRef) {
     if (!ref.startsWith('heads/')) continue
@@ -262,23 +331,44 @@ export function diaryEvents(diary: GleisDiary, branches: string[]): DiaryEvent[]
       const ev = mk(c, en, { branch: b })
       if (!prev && (c.kind === 'create' || c.kind === 'clone' || c.initial)) ev.creates.push('branch')
       if (c.kind === 'merge' && c.from?.startsWith('origin/')) ev.remote = c.from
+      // Übernommen aus einem Zweig, den es nicht mehr gibt (aufgeräumt): woher kamen seine Speicherstände?
+      if (c.kind === 'merge' && c.from && c.from !== b && !isHash(c.from) && !isRemoteName(c.from) && !local.has(c.from)) {
+        ev.goneFrom = { outside: diary.mergeOrigins?.[en.hash] ?? null }
+      }
       events.push(ev)
       fromBranches.push(ev)
     })
   }
 
-  // 2. Zweige bei GitHub (so, wie dieser PC sie gesehen hat)
+  // 2. Zweige bei GitHub (so, wie dieser PC sie gesehen hat). Bei einer anderen Ablage als origin
+  // heißt der Zweig dort oft anders (oeffentlich → git-tracking/main): dann gehört das Hochladen zu
+  // dem Zweig, der eingetragen ist, sonst zu dem, der hier zuletzt auf diesem Speicherstand stand
+  const upstreamOf = new Map(diary.track.filter(t => t.upstream).map(t => [t.upstream!, t.branch]))
+  const localAt = (hash: string, time: number): string | null => {
+    let best: DiaryEntry | null = null
+    for (const [ref, list] of byRef) {
+      if (!ref.startsWith('heads/')) continue
+      for (const e of list) if (e.hash === hash && e.time <= time + 5 && (!best || e.time > best.time)) best = e
+    }
+    return best ? best.ref.slice(6) : null
+  }
   for (const [ref, list] of byRef) {
     if (!ref.startsWith('remotes/')) continue
     const r = ref.slice(8)
     if (r.endsWith('/HEAD')) continue
     const short = r.slice(r.indexOf('/') + 1)
+    const isOrigin = r.startsWith('origin/')
     list.forEach((en, k) => {
       const c = classify(en.msg, true)
       if (!c) return
       const prev = list[k + 1]
       if (prev && prev.hash === en.hash) return
-      const ev = mk(c, en, { remote: r, branch: local.has(short) ? short : null })
+      const branch = isOrigin
+        ? local.has(short)
+          ? short
+          : null
+        : (upstreamOf.get(r) ?? localAt(en.hash, en.time))
+      const ev = mk(c, en, { remote: r, branch })
       if (!prev) ev.creates.push('remote')
       if (c.kind === 'clone') remoteClones.push(ev)
       else events.push(ev)
@@ -369,7 +459,7 @@ export function diaryEvents(diary: GleisDiary, branches: string[]): DiaryEvent[]
     if (
       e.kind === 'push' &&
       n &&
-      (n.kind === 'commit' || n.kind === 'amend' || n.kind === 'merge') &&
+      (n.kind === 'commit' || n.kind === 'amend' || n.kind === 'merge' || n.kind === 'split') &&
       n.hash === e.hash &&
       !n.pushed &&
       e.time - n.time <= 900
@@ -386,10 +476,15 @@ export function diaryEvents(diary: GleisDiary, branches: string[]): DiaryEvent[]
 // ---------------------------------------------------------------- Spuren und Zeilen
 
 export type EbenenLane = {
-  /** r:origin/x (GitHub), b:x (PC), f:n (Ordner; f:-1 = frühere Ordner) */
+  /** r:origin/x (GitHub), b:x (PC), f:n (Ordner; f:-1 = frühere Ordner), v:owner/repo (Veröffentlicht) */
   key: string
-  col: 0 | 1 | 2
+  /** 0 = GitHub, 1 = PC, 2 = Ordner, 3 = Veröffentlicht (wird links von GitHub gezeichnet) */
+  col: 0 | 1 | 2 | 3
   name: string
+  /** Veröffentlicht, aber nichts davon im gezeigten Ausschnitt: nur blass angedeutet */
+  faint?: boolean
+  /** Zweig, den es nicht mehr gibt: teilt sich mit allen anderen gelöschten die graue Spur „gelöscht“ */
+  deleted?: boolean
   /** Gibt es jetzt noch */
   exists: boolean
   /** Gibt es noch, aber nichts ist offen (zusammengeführt, hochgeladen, in keinem Ordner): endet am letzten Ereignis */
@@ -452,6 +547,12 @@ function openLanes(diary: GleisDiary, opt: ModelOptions): (key: string) => boole
   const open = new Set<string>()
   if (main) open.add(`b:${main}`)
   if (diary.mainRemote) open.add(`r:${diary.mainRemote}`)
+  // Der Hauptzweig jeder anderen GitHub-Ablage (z. B. git-tracking/main) läuft wie der eigene bis „Jetzt“
+  for (const r of diary.remoteBranches) {
+    if (r.startsWith('origin/')) continue
+    const b = r.slice(r.indexOf('/') + 1)
+    if (b === main || b === 'main' || b === 'master') open.add(`r:${r}`)
+  }
   if (opt.current) open.add(`b:${opt.current}`)
   for (const f of diary.folders) if (f.branch) open.add(`b:${f.branch}`)
   for (const b of opt.unmerged) open.add(`b:${b}`)
@@ -471,6 +572,10 @@ function openLanes(diary: GleisDiary, opt: ModelOptions): (key: string) => boole
 
 /** Die Spuren, die ein Ereignis berührt, und die, zu der es gehört */
 export function laneKeysOf(ev: DiaryEvent, main: string | null): { keys: string[]; primary: string | null } {
+  if (ev.release) {
+    const v = releaseLane(ev.release.repo)
+    return { keys: [v], primary: v }
+  }
   const keys: string[] = []
   const b = ev.branch ? `b:${ev.branch}` : null
   const r = ev.remote ? `r:${ev.remote}` : null
@@ -508,17 +613,22 @@ export function ebenenModel(events: DiaryEvent[], diary: GleisDiary, opt: ModelO
     byRecency('r:'),
     4,
   )
+  // Bestehende Zweige höchstens 5; gelöschte teilen sich eine Spur und zählen nicht mit
+  const isLocal = (k: string) => opt.branches.includes(k.slice(2))
   const pc = pick(
     [main && opt.branches.includes(main) ? `b:${main}` : null, opt.current ? `b:${opt.current}` : null],
-    byRecency('b:'),
+    byRecency('b:').filter(isLocal),
     5,
   )
+  const gone = byRecency('b:').filter(k => !isLocal(k))
   const existingFolders = diary.folders.map((_, i) => `f:${i}`)
   const usedFolders = byRecency('f:').filter(k => k !== 'f:-1')
   const fo = pick(existingFolders.slice(0, 3), usedFolders, lastSeen.has('f:-1') ? 3 : 4)
   if (lastSeen.has('f:-1')) fo.push('f:-1')
+  // Veröffentlicht: höchstens 3 Ablagen, die mit der neuesten Veröffentlichung zuerst
+  const rel = byRecency('v:').slice(0, 3)
 
-  const visible = new Set([...gh, ...pc, ...fo])
+  const visible = new Set([...gh, ...pc, ...gone, ...fo, ...rel])
   const shown = events.filter(ev => {
     const p = laneKeysOf(ev, main).primary
     return p !== null && visible.has(p)
@@ -573,7 +683,19 @@ export function ebenenModel(events: DiaryEvent[], diary: GleisDiary, opt: ModelO
     i < 0 ? opt.t.formerFolders : diary.folders[i]?.isMain ? opt.t.mainFolder : (diary.folders[i]?.name ?? opt.t.folderGeneric)
   const isOpen = openLanes(diary, opt)
   const lanes: EbenenLane[] = []
-  for (const key of [...gh, ...pc, ...fo]) {
+  const inWindow = new Set(win)
+  for (const key of rel) {
+    const t = touched.get(key) ?? []
+    const name = key.slice(key.lastIndexOf('/') + 1)
+    // Ältere Veröffentlichungen dieser Ablage weiter unten: die Spur läuft bis zum Ende weiter
+    const older = shown.some(ev => ev.release && releaseLane(ev.release.repo) === key && !inWindow.has(ev))
+    if (t.length === 0) {
+      lanes.push({ key, col: 3, name, exists: true, idle: false, faint: true, top: Math.min(1, tail), bottom: tail })
+      continue
+    }
+    lanes.push({ key, col: 3, name, exists: true, idle: false, top: Math.min(...t), bottom: older ? tail : Math.max(...t) })
+  }
+  for (const key of [...gh, ...pc, ...gone, ...fo]) {
     const t = touched.get(key) ?? []
     const id = key.slice(2)
     const col: 0 | 1 | 2 = key.startsWith('r:') ? 0 : key.startsWith('b:') ? 1 : 2
@@ -587,8 +709,10 @@ export function ebenenModel(events: DiaryEvent[], diary: GleisDiary, opt: ModelO
     const top = exists && !idle ? 0 : Math.min(...t)
     // Eine Spur, die es nicht mehr gibt, beginnt beim ältesten bekannten Ereignis (ihr Anlegen steht in keinem Tagebuch mehr)
     const bottom = key === 'f:-1' || !exists ? maxT : cr !== undefined && cr >= maxT ? cr : tail
-    const name = col === 0 ? id.slice(id.indexOf('/') + 1) : col === 1 ? id : folderName(Number(id))
-    lanes.push({ key, col, name, exists, idle, top, bottom: Math.max(top, bottom) })
+    const name = col === 0 ? remoteLabel(id, diary.remoteNames, main) : col === 1 ? id : folderName(Number(id))
+    const lane: EbenenLane = { key, col, name, exists, idle, top, bottom: Math.max(top, bottom) }
+    if (col === 1 && !exists) lane.deleted = true
+    lanes.push(lane)
   }
   return { lanes, rows, hidden, hasMore }
 }
@@ -598,10 +722,11 @@ export function ebenenModel(events: DiaryEvent[], diary: GleisDiary, opt: ModelO
 export const COL_GH = '#3b8eea'
 export const COL_PC = '#e0a028'
 export const COL_ORD = '#5fa83a'
+export const COL_REL = '#8a63d2'
 const GREY = '#8b949e'
 const RED = '#e0554c'
-const COLS = [COL_GH, COL_PC, COL_ORD]
-const BANDS = ['rgba(59,142,234,0.08)', 'rgba(224,160,40,0.09)', 'rgba(95,168,58,0.09)']
+const COLS = [COL_GH, COL_PC, COL_ORD, COL_REL]
+const BANDS = ['rgba(59,142,234,0.08)', 'rgba(224,160,40,0.09)', 'rgba(95,168,58,0.09)', 'rgba(138,99,210,0.10)']
 const FONT = "font-family=\"Segoe UI, system-ui, sans-serif\""
 const CSS = '.st{fill:#ffffff}@media (prefers-color-scheme: dark){.st{fill:#1f2328}}'
 
@@ -631,18 +756,31 @@ const cut = (s: string, n: number) => ([...s].length <= n ? s : [...s].slice(0, 
 /** Zerlegt die Drei-Ebenen-Ansicht in Zeilen-Grafiken, die nahtlos aneinander passen */
 export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawing {
   // Spalten und Spuren
+  // Spalten von links: Veröffentlicht (nur wenn es Veröffentlichungen gibt), GitHub, PC, Ordner
+  const order: (0 | 1 | 2 | 3)[] = model.lanes.some(l => l.col === 3) ? [3, 0, 1, 2] : [0, 1, 2]
   const colStart: number[] = []
   const colW: number[] = []
   const xs = new Map<string, number>()
   let x = 2
-  for (const c of [0, 1, 2] as const) {
-    const lanes = model.lanes.filter(l => l.col === c)
-    const natural = 2 * PADC + Math.max(0, lanes.length - 1) * LANE
-    const w = Math.max(MINW, natural)
-    colStart.push(x)
-    colW.push(w)
+  /** Wo die gemeinsame Spur „gelöscht“ steht (rechts in der Spalte PC), wenn es gelöschte Zweige gibt */
+  let deletedX: number | null = null
+  for (const c of order) {
+    const all = model.lanes.filter(l => l.col === c)
+    const own = all.filter(l => !l.deleted)
+    const hasDeleted = all.length > own.length
+    const slots = own.length + (hasDeleted ? 1 : 0)
+    const natural = 2 * PADC + Math.max(0, slots - 1) * LANE
+    // „Veröffentlicht“ ist länger als die anderen Spaltennamen: die Spalte wird so breit wie ihr Name
+    const minW = c === 3 ? Math.ceil([...(opt.t.levelTitles[3] ?? '')].length * 6.2 + 6) : MINW
+    const w = Math.max(minW, natural)
+    colStart[c] = x
+    colW[c] = w
     const off = (w - natural) / 2
-    lanes.forEach((l, i) => xs.set(l.key, x + off + PADC + i * LANE))
+    own.forEach((l, i) => xs.set(l.key, x + off + PADC + i * LANE))
+    if (hasDeleted) {
+      deletedX = x + off + PADC + own.length * LANE
+      for (const l of all) if (l.deleted) xs.set(l.key, deletedX)
+    }
     x += w
   }
   const width = Math.ceil(x + 2)
@@ -650,8 +788,9 @@ export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawin
 
   const frame = (h: number, body: string) =>
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${h}" viewBox="0 0 ${width} ${h}" ${FONT}><style>${CSS}</style>` +
-    [0, 1, 2].map(c => `<rect x="${colStart[c]}" y="0" width="${colW[c]}" height="${h}" fill="${BANDS[c]}"/>`).join('') +
-    [1, 2]
+    order.map(c => `<rect x="${colStart[c]}" y="0" width="${colW[c]}" height="${h}" fill="${BANDS[c]}"/>`).join('') +
+    order
+      .slice(1)
       .map(
         c =>
           `<line x1="${colStart[c]}" y1="0" x2="${colStart[c]}" y2="${h}" stroke="${GREY}" stroke-opacity="0.55" stroke-width="1.5" stroke-dasharray="2 2"/>`,
@@ -661,22 +800,23 @@ export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawin
     '</svg>'
 
   // Kopf: Spaltennamen und senkrechte Spurnamen
-  const names = model.lanes.map(l => cut(l.name, 14))
+  // Gelöschte Zweige stehen nicht einzeln im Kopf, sondern einmal als „gelöscht“
+  const named = model.lanes.filter(l => !l.deleted)
+  const names = named.map(l => cut(l.name, 14))
+  if (deletedX !== null) names.push(opt.t.deletedLane)
   const longest = Math.max(4, ...names.map(n => [...n].length))
   const headH = Math.ceil((22 + longest * 6.4 + 6) / 4) * 4
-  const titles = opt.t.levelTitles
+  const titles = order
     .map(
-      (t, c) =>
-        `<text x="${colStart[c]! + colW[c]! / 2}" y="13" text-anchor="middle" font-size="11.5" font-weight="600" fill="${COLS[c]}">${t}</text>`,
+      c =>
+        `<text x="${colStart[c]! + colW[c]! / 2}" y="13" text-anchor="middle" font-size="11.5" font-weight="600" fill="${COLS[c]}">${esc(opt.t.levelTitles[c] ?? '')}</text>`,
     )
     .join('')
-  const laneNames = model.lanes
-    .map((l, i) => {
-      const lx = xs.get(l.key)!
-      const color = l.key === 'f:-1' ? GREY : COLS[l.col]
-      return `<text transform="translate(${lx + 4} ${headH - 4}) rotate(-90)" font-size="11" fill="${color}">${esc(names[i]!)}</text>`
-    })
-    .join('')
+  const laneName = (lx: number, color: string, name: string) =>
+    `<text transform="translate(${lx + 4} ${headH - 4}) rotate(-90)" font-size="11" fill="${color}">${esc(name)}</text>`
+  const laneNames =
+    named.map((l, i) => laneName(xs.get(l.key)!, l.key === 'f:-1' ? GREY : COLS[l.col]!, names[i]!)).join('') +
+    (deletedX !== null ? laneName(deletedX, GREY, opt.t.deletedLane) : '')
   const header = { svg: frame(headH, titles + laneNames), height: headH }
 
   const line = (x1: number, y1: number, x2: number, y2: number, color: string, extra = '') =>
@@ -713,8 +853,15 @@ export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawin
       .map(l => {
         if (r < l.top || r > l.bottom) return ''
         const lx = xs.get(l.key)!
-        const color = l.key === 'f:-1' ? GREY : COLS[l.col]!
-        const dash = l.key === 'f:-1' ? 'stroke-dasharray="4 4"' : fade ? 'stroke-dasharray="2 3" stroke-opacity="0.6"' : ''
+        const color = l.key === 'f:-1' || l.deleted ? GREY : COLS[l.col]!
+        const dash =
+          l.key === 'f:-1'
+            ? 'stroke-dasharray="4 4"'
+            : l.faint
+              ? 'stroke-dasharray="2 4" stroke-opacity="0.45"'
+              : fade
+                ? 'stroke-dasharray="2 3" stroke-opacity="0.6"'
+                : ''
         // Mündet die Spur an ihrem oberen Ende in eine andere, ist die Schräge dorthin ihr Ende
         const intoOther = r === l.top && r > 0 && mergedAt[r] === l.key
         const end = intoOther ? h - 3 : yc
@@ -722,7 +869,8 @@ export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawin
         const y2 = r === l.bottom ? yc : h
         let s = y2 > y1 ? line(lx, y1, lx, y2, color, dash) : ''
         if (r === l.top && r > 0 && l.key !== 'f:-1') {
-          if (!l.exists) {
+          // Rotes ✕ nur, wenn ein gelöschter Zweig nicht in einen anderen übernommen wurde (Arbeit evtl. verloren)
+          if (!l.exists && !intoOther) {
             s += `<path d="M${lx - 3.5} ${end - 12.5} L${lx + 3.5} ${end - 5.5} M${lx + 3.5} ${end - 12.5} L${lx - 3.5} ${end - 5.5}" stroke="${RED}" stroke-width="2" stroke-linecap="round"/>`
           } else if (l.idle && !intoOther) {
             // Nichts mehr offen: die Linie läuft nach oben aus
@@ -786,6 +934,11 @@ export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawin
         if (xr !== undefined) over += dot(xr, yc, COL_GH)
         if (xb !== undefined) over += dot(xb, yc, COL_PC)
         break
+      case 'split':
+        // Herausgelöst (ein neuer Speicherstand auf dem Zweig), oft gleich hochgeladen
+        if (xp !== undefined) over += arrow(xb, xp, yc, COL_PC) + dot(xp, yc, COL_GH)
+        if (xb !== undefined) over += dot(xb, yc, COL_PC)
+        break
       case 'fetch':
         over += arrow(xr, xb ?? pcEdge, yc, COL_PC)
         if (xr !== undefined) over += dot(xr, yc, COL_GH)
@@ -829,6 +982,19 @@ export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawin
         if (xr !== undefined) over += dot(xr, yc, COL_GH)
         if (xb !== undefined) over += dot(xb, yc, COL_PC)
         break
+      case 'release': {
+        // Lila Pfeil vom Hauptzweig bei GitHub zur Ablage; Punkt = fertige Version, Ring = Beta
+        const xv = X(ev.release ? releaseLane(ev.release.repo) : null)
+        const xg = X(opt.mainBranch ? `r:origin/${opt.mainBranch}` : null) ?? colStart[0]! + colW[0]! / 2
+        over += arrow(xg, xv, yc, COL_REL)
+        if (xv !== undefined) {
+          over += ev.release?.beta ? ring(xv, yc, COL_REL) : dot(xv, yc, COL_REL)
+          // Die neueste Veröffentlichung jeder Ablage bekommt einen Kreis
+          const lane = model.lanes.find(l => l.key === releaseLane(ev.release!.repo))
+          if (lane && lane.top === r) over += `<circle cx="${xv}" cy="${yc}" r="7.5" fill="none" stroke="${COL_REL}" stroke-width="1.5"/>`
+        }
+        break
+      }
       case 'other':
         if (xb !== undefined) over += dot(xb, yc, GREY)
         break
@@ -851,27 +1017,45 @@ export function eventLines(
   folderName: (i: number | null) => string,
   main: string | null,
   t: Texts,
+  /** GitHub-Ablage je Gegenstelle, für Hochladen in eine andere Ablage als origin */
+  remoteNames?: Record<string, string>,
 ): { title: string; detail: string } {
   const e = t.ev
   const b = ev.branch ?? e.noBranch
   // Der Zweig steht (außer beim Hauptzweig) vorn in der zweiten Zeile
   const sub = (x: string) => (ev.branch && ev.branch !== main ? (x ? `${ev.branch}: ${x}` : ev.branch) : x)
   const short = (r: string | null) => (r ? r.slice(r.indexOf('/') + 1) : '?')
+  /** Eine andere Ablage als origin: deren Name, sonst null */
+  const elsewhere = (r: string | null) => (r && !r.startsWith('origin/') ? remoteLabel(r, remoteNames, main) : null)
+  const to = elsewhere(ev.pushed)
   switch (ev.kind) {
     case 'commit':
       if (ev.initial) return { title: e.initial, detail: sub(ev.subject) }
-      return { title: ev.pushed ? e.committedPushed : e.committed, detail: sub(ev.subject) }
+      return { title: ev.pushed ? e.committedPushed + (to ? ` → ${to}` : '') : e.committed, detail: sub(ev.subject) }
+    case 'split':
+      return { title: ev.pushed ? e.splitPushed(to ?? short(ev.pushed)) : e.split, detail: ev.branch ?? '' }
     case 'amend':
       return { title: e.amended + (ev.pushed ? e.pushedSuffix : ''), detail: sub(ev.subject) }
     case 'merge':
       if (ev.from?.startsWith('origin/')) return { title: e.mergedRemote, detail: sub(e.fromGitHub(short(ev.from))) }
-      return { title: e.mergedInto(b) + (ev.pushed ? e.pushedSuffix : ''), detail: e.mergedFrom(ev.from ?? '?') }
+      {
+        // Aus einem aufgeräumten Zweig: sagen, dass es ihn nicht mehr gibt und aus welchem Ordner festgehalten wurde
+        // Kurz halten: Mit der Ordner-Feststellung ist klar, dass der Zweig weg ist (graue Spur), sonst „(aufgeräumt)“
+        const g = ev.goneFrom
+        const from = e.mergedFrom(ev.from ?? '?')
+        const where = g?.outside === 'all' ? e.outsideAll : g?.outside === 'some' ? e.outsideSome : ''
+        const detail = where ? `${from} · ${where}` : g ? `${from} (${e.cleanedUp})` : from
+        return { title: e.mergedInto(b) + (ev.pushed ? e.pushedSuffix : ''), detail }
+      }
     case 'pull':
       return { title: e.pulled, detail: sub(ev.subject) }
-    case 'push':
+    case 'push': {
+      const other = elsewhere(ev.remote)
+      if (other) return { title: e.pushedTo(other), detail: ev.branch ?? '' }
       return { title: e.pushed(ev.branch ?? short(ev.remote)), detail: '' }
+    }
     case 'fetch':
-      return { title: e.fetched(short(ev.remote)), detail: ev.branch ? '' : e.fetchedNoLocal }
+      return { title: e.fetched(elsewhere(ev.remote) ?? short(ev.remote)), detail: ev.branch ? '' : e.fetchedNoLocal }
     case 'remotemerge': {
       const source = remoteSource(ev)
       const parts = [
@@ -899,6 +1083,14 @@ export function eventLines(
       return { title: e.newBranch(b), detail: ev.from && !isHash(ev.from) && ev.from !== 'HEAD' ? e.fromSource(ev.from) : '' }
     case 'clone':
       return { title: e.cloned, detail: sub('') }
+    case 'release': {
+      const rel = ev.release
+      if (!rel) return { title: ev.subject, detail: '' }
+      return {
+        title: rel.beta ? e.betaPublished(rel.tag) : e.published(rel.tag),
+        detail: rel.repo.slice(rel.repo.indexOf('/') + 1),
+      }
+    }
     case 'other':
       return { title: b, detail: ev.subject }
   }

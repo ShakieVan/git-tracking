@@ -36,6 +36,10 @@ export type Texts = {
   noCommitYet: string
   oneTrack: (main: string) => string
   tracks: (main: string, n: number, unmerged: number) => string
+  /** Zweige, die in eine andere GitHub-Ablage hochgeladen werden: „1 Zweig für die Ablage git-tracking“ */
+  otherRepoTracks: (n: number, repos: string) => string
+  /** „Hauptzweig main + …“, wenn es sonst keine Entwicklungszweige gibt */
+  mainWith: (main: string, rest: string) => string
   worktreesTitle: (n: number) => string
   worktreeTarget: (branch: string | null, head: string) => string
   mainWorktree: string
@@ -123,9 +127,11 @@ export type Texts = {
   binary: string
   moreFiles: (n: number) => string
   // Three levels
-  levelTitles: [string, string, string]
+  levelTitles: [string, string, string, string]
   mainFolder: string
   formerFolders: string
+  /** Gemeinsame Spur aller gelöschten Zweige in der Spalte PC */
+  deletedLane: string
   aFormerFolder: string
   folderGeneric: string
   diaryLine: string
@@ -180,9 +186,99 @@ export type Texts = {
     newBranch: (b: string) => string
     fromSource: (x: string) => string
     cloned: string
+    published: (tag: string) => string
+    betaPublished: (tag: string) => string
+    split: string
+    splitPushed: (target: string) => string
+    pushedTo: (target: string) => string
+    cleanedUp: string
+    outsideAll: string
+    outsideSome: string
   }
   /** Kurzfassung für Claude (kurzfassung.ts) */
   brief: BriefTexts
+  /** Veröffentlichungen und Betas (ablagen.ts) */
+  rel: ReleaseTexts
+}
+
+export type ReleaseTexts = {
+  /** Vor der Liste der Ablagen unter der Ansicht */
+  reposTitle: string
+  role: Record<'code' | 'release' | 'beta' | 'other', string>
+  guessed: string
+  checked: (when: string) => string
+  update: string
+  checking: string
+  loading: string
+  newRepos: (names: string[]) => string
+  failedRepo: (repo: string, reason: string) => string
+  reason: (code: string) => string
+  /** Legende: lila Pfeil und Punkt/Ring */
+  legend: string
+  claudeFailed: (reason: string) => string
+  claudeUnclear: string
+  busy: string
+  updatedToast: (n: number) => string
+}
+
+const relDe: ReleaseTexts = {
+  reposTitle: 'Ablagen bei GitHub',
+  role: { code: 'Quellcode', release: 'Veröffentlichungen', beta: 'Betas', other: 'gehört dazu' },
+  guessed: 'Vermutet aus den Namen bei GitHub – „Projekt aktualisieren“ lässt Claude im Hintergrund nachsehen.',
+  checked: w => `Von Claude geprüft: ${w}.`,
+  update: 'Projekt aktualisieren',
+  checking: 'Claude prüft im Hintergrund, welche Ablagen dazugehören …',
+  loading: 'Lese die Veröffentlichungen von GitHub …',
+  newRepos: names =>
+    `Neu bei GitHub: ${names.join(', ')}. „Projekt aktualisieren“ prüft, ob ${names.length === 1 ? 'sie dazugehört' : 'sie dazugehören'}.`,
+  failedRepo: (repo, reason) => `${repo}: nicht lesbar (${reason})`,
+  reason: c =>
+    c === 'not-found'
+      ? 'nicht gefunden oder privat'
+      : c === 'rate-limit'
+        ? 'GitHub bremst gerade, später noch einmal'
+        : c === 'offline'
+          ? 'keine Verbindung'
+          : c === 'aborted'
+            ? 'Zeit abgelaufen'
+            : c === 'empty-reply'
+              ? 'leere Antwort'
+              : c,
+  legend: 'lila: bei GitHub veröffentlicht (Punkt = fertige Version, Ring = Beta, Kreis = neueste)',
+  claudeFailed: r => `Claude konnte die Ablagen nicht prüfen (${r}). Gezeigt wird weiter die bisherige Liste.`,
+  claudeUnclear: 'Claudes Antwort war nicht lesbar. Gezeigt wird weiter die bisherige Liste.',
+  busy: 'Das Projekt wird gerade schon aktualisiert.',
+  updatedToast: n => `Projekt aktualisiert: ${n1(n, 'Ablage', 'Ablagen')} bei GitHub.`,
+}
+
+const relEn: ReleaseTexts = {
+  reposTitle: 'Repositories on GitHub',
+  role: { code: 'source code', release: 'releases', beta: 'betas', other: 'belongs to it' },
+  guessed: 'Guessed from the names on GitHub – “Update project” lets Claude check in the background.',
+  checked: w => `Checked by Claude: ${w}.`,
+  update: 'Update project',
+  checking: 'Claude is checking in the background which repositories belong to it …',
+  loading: 'Reading the releases from GitHub …',
+  newRepos: names =>
+    `New on GitHub: ${names.join(', ')}. “Update project” checks whether ${names.length === 1 ? 'it belongs' : 'they belong'} to it.`,
+  failedRepo: (repo, reason) => `${repo}: could not be read (${reason})`,
+  reason: c =>
+    c === 'not-found'
+      ? 'not found or private'
+      : c === 'rate-limit'
+        ? 'GitHub rate limit, try again later'
+        : c === 'offline'
+          ? 'no connection'
+          : c === 'aborted'
+            ? 'timed out'
+            : c === 'empty-reply'
+              ? 'empty reply'
+              : c,
+  legend: 'purple: published on GitHub (dot = release, ring = beta, circle = newest)',
+  claudeFailed: r => `Claude could not check the repositories (${r}). The previous list is still shown.`,
+  claudeUnclear: 'Claude’s answer could not be read. The previous list is still shown.',
+  busy: 'The project is already being updated.',
+  updatedToast: n => `Project updated: ${n1(n, 'repository', 'repositories')} on GitHub.`,
 }
 
 /** Was eine Git-Aktion im Tagebuch war (aus classify in ebenen.ts) */
@@ -255,6 +351,8 @@ const de: Texts = {
   tracks: (m, n, u) =>
     `Hauptzweig ${m} + ${n1(n, 'Entwicklungszweig', 'Entwicklungszweige')}` +
     (u > 0 ? `, davon ${u} noch nicht zusammengeführt` : ', alle schon zusammengeführt'),
+  otherRepoTracks: (n, r) => `${n1(n, 'Zweig', 'Zweige')} für die Ablage ${r} (${n === 1 ? 'wird' : 'werden'} nicht zusammengeführt)`,
+  mainWith: (m, rest) => `Hauptzweig ${m} + ${rest}`,
   worktreesTitle: n => `Zusätzliche Arbeitsverzeichnisse (${n}):`,
   worktreeTarget: (b, h) => (b ? `Zweig ${b}` : `ohne Zweig bei ${h}`),
   mainWorktree: ' (Hauptverzeichnis)',
@@ -350,9 +448,10 @@ const de: Texts = {
   stat: (f, p, m) => `${f} ${f === 1 ? 'Datei' : 'Dateien'} geändert (+${p} / −${m} Zeilen)`,
   binary: 'Binärdatei',
   moreFiles: n => `${n} weitere nicht gezeigt`,
-  levelTitles: ['GitHub', 'PC', 'Ordner'],
+  levelTitles: ['GitHub', 'PC', 'Ordner', 'Veröffentlicht'],
   mainFolder: 'Hauptordner',
   formerFolders: 'frühere Ordner',
+  deletedLane: 'gelöscht',
   aFormerFolder: 'Ein früherer Ordner',
   folderGeneric: 'Ordner',
   diaryLine: 'Eine Zeile = ein Eintrag im Tagebuch dieses PCs, oben neu',
@@ -376,7 +475,7 @@ const de: Texts = {
   arrowYellow: 'gelb, zwischen GitHub und PC: nach links = hochgeladen (push), nach rechts = abgeholt (fetch/pull)',
   arrowGreen: 'grün, zwischen PC und Ordner: nach links = festgehalten (commit), nach rechts = in den Ordner geholt (checkout)',
   levelsLegend:
-    '✕ = Zweig gelöscht · Linie läuft aus = auf dem Zweig ist nichts mehr offen (zusammengeführt, hochgeladen) · grauer Stummel = verworfen (zurückgesetzt, nachträglich geändert, umgeschrieben) · graue gestrichelte Spur = frühere Ordner, z. B. beendete Claude-Sitzungen · Was bei GitHub passiert (z. B. Zusammenführen auf der Webseite), sieht dieser PC erst beim Abholen · Klick auf eine Zeile: Details und Fragen',
+    '✕ = Zweig gelöscht, ohne übernommen zu sein (Arbeit evtl. verloren) · graue Spur „gelöscht“ = alle gelöschten Zweige; übernommene biegen dort in ihr Ziel ein · Linie läuft aus = auf dem Zweig ist nichts mehr offen (zusammengeführt, hochgeladen) · grauer Stummel = verworfen (zurückgesetzt, nachträglich geändert, umgeschrieben) · graue gestrichelte Spur = frühere Ordner, z. B. beendete Claude-Sitzungen · Was bei GitHub passiert (z. B. Zusammenführen auf der Webseite), sieht dieser PC erst beim Abholen · Klick auf eine Zeile: Details und Fragen',
   hiddenEvents: n => ` · ${n} Ereignisse auf weiteren Zweigen nicht gezeigt`,
   ev: {
     noBranch: 'ohne Zweig',
@@ -408,7 +507,16 @@ const de: Texts = {
     newBranch: b => `Neuer Zweig ${b}`,
     fromSource: x => `von ${x}`,
     cloned: 'Von GitHub kopiert',
+    published: tag => `Veröffentlicht: ${tag}`,
+    betaPublished: tag => `Beta veröffentlicht: ${tag}`,
+    split: 'Herausgelöst (subtree split)',
+    splitPushed: target => `Herausgelöst + hochgeladen → ${target}`,
+    pushedTo: target => `Hochgeladen → ${target}`,
+    cleanedUp: 'aufgeräumt',
+    outsideAll: 'festgehalten aus gelöschtem Ordner',
+    outsideSome: 'teils festgehalten aus gelöschtem Ordner',
   },
+  rel: relDe,
   brief: {
     head: (d, mode) =>
       'Git-Tracking (Erweiterung des Nutzers) – ' +
@@ -517,6 +625,8 @@ const en: Texts = {
   oneTrack: m => `Single track: everything is on the main branch ${m}, no other branches`,
   tracks: (m, n, u) =>
     `Main branch ${m} + ${n1(n, 'branch', 'branches')}` + (u > 0 ? `, ${u} not merged yet` : ', all merged'),
+  otherRepoTracks: (n, r) => `${n1(n, 'branch', 'branches')} for the repository ${r} (not merged)`,
+  mainWith: (m, rest) => `Main branch ${m} + ${rest}`,
   worktreesTitle: n => `Additional worktrees (${n}):`,
   worktreeTarget: (b, h) => (b ? `branch ${b}` : `detached at ${h}`),
   mainWorktree: ' (main worktree)',
@@ -608,9 +718,10 @@ const en: Texts = {
   stat: (f, p, m) => `${f} ${f === 1 ? 'file' : 'files'} changed (+${p} / −${m} lines)`,
   binary: 'binary',
   moreFiles: n => `${n} more not shown`,
-  levelTitles: ['GitHub', 'PC', 'Folder'],
+  levelTitles: ['GitHub', 'PC', 'Folder', 'Releases'],
   mainFolder: 'main folder',
   formerFolders: 'former folders',
+  deletedLane: 'deleted',
   aFormerFolder: 'A former folder',
   folderGeneric: 'Folder',
   diaryLine: 'One row = one entry in this PC’s Git log (reflog), newest at the top',
@@ -634,7 +745,7 @@ const en: Texts = {
   arrowYellow: 'yellow, between GitHub and PC: to the left = pushed, to the right = fetched/pulled',
   arrowGreen: 'green, between PC and folder: to the left = committed, to the right = checked out into the folder',
   levelsLegend:
-    '✕ = branch deleted · line fading out = nothing open on that branch (merged, pushed) · grey stub = discarded (reset, amended, rebased) · grey dashed lane = former folders, e.g. finished Claude sessions · What happens on GitHub (e.g. a merge on the website) shows up on this PC only after a fetch · Click a row: details and questions',
+    '✕ = branch deleted without being merged (work may be lost) · grey lane “deleted” = all deleted branches; merged ones bend into their target there · line fading out = nothing open on that branch (merged, pushed) · grey stub = discarded (reset, amended, rebased) · grey dashed lane = former folders, e.g. finished Claude sessions · What happens on GitHub (e.g. a merge on the website) shows up on this PC only after a fetch · Click a row: details and questions',
   hiddenEvents: n => ` · ${n} events on further branches not shown`,
   ev: {
     noBranch: 'no branch',
@@ -666,7 +777,16 @@ const en: Texts = {
     newBranch: b => `New branch ${b}`,
     fromSource: x => `from ${x}`,
     cloned: 'Cloned from GitHub',
+    published: tag => `Released: ${tag}`,
+    betaPublished: tag => `Beta released: ${tag}`,
+    split: 'Split off (subtree split)',
+    splitPushed: target => `Split off + pushed → ${target}`,
+    pushedTo: target => `Pushed → ${target}`,
+    cleanedUp: 'deleted',
+    outsideAll: 'committed from a deleted folder',
+    outsideSome: 'partly committed from a deleted folder',
   },
+  rel: relEn,
   brief: {
     head: (d, mode) =>
       "Git-Tracking (the user's mod) – " +
