@@ -132,6 +132,7 @@ export type Texts = {
   readingDiary: string
   now: string
   nowAll: string
+  nowAllLocal: string
   nowWork: string
   nowPush: string
   nowPull: string
@@ -358,6 +359,7 @@ const de: Texts = {
   readingDiary: 'Lese das Tagebuch …',
   now: 'Jetzt',
   nowAll: 'alles festgehalten, hochgeladen und abgeholt',
+  nowAllLocal: 'alles festgehalten, nur auf diesem PC',
   nowWork: 'in Arbeit',
   nowPush: 'hochladen',
   nowPull: 'abholen',
@@ -615,6 +617,7 @@ const en: Texts = {
   readingDiary: 'Reading the reflog …',
   now: 'Now',
   nowAll: 'everything committed, pushed and pulled',
+  nowAllLocal: 'everything committed, only on this computer',
   nowWork: 'in progress',
   nowPush: 'push',
   nowPull: 'pull',

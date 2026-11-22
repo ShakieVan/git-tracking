@@ -1159,7 +1159,9 @@ export const register: Register = (on, options) => {
       }
       const nowText =
         nowSymbols.length === 0
-          ? t.nowAll
+          ? snap.remotes.length > 0
+            ? t.nowAll
+            : t.nowAllLocal
           : [
               working.length > 0 ? t.nowWork : '',
               toPush.length > 0 ? t.nowPush : '',

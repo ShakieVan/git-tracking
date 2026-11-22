@@ -435,6 +435,63 @@ test('Kurzfassung: abgeschaltet – kein Block', { options: { language: 'de', cl
   expect(res.blocks.find(b => b.name === 'gitTracking')).toBeUndefined()
 })
 
+// Nur auf diesem PC: ein Speicherstand, keine GitHub-Ablage
+function answerLocal(argv: readonly string[]) {
+  const args = argv.slice(argv.indexOf('color.ui=never') + 1)
+  switch (args[0]) {
+    case 'rev-parse':
+      return ok('C:/Projekte/Demo\n')
+    case 'status':
+      return ok('# branch.oid c1\n# branch.head main\n')
+    case 'worktree':
+      return ok('worktree C:/Projekte/Demo\nHEAD c1\nbranch refs/heads/main\n')
+    case 'for-each-ref':
+      return args.some(a => a.includes('upstream:track')) ? ok('refs/heads/main\tc1\t\t\n') : ok('refs/heads/main\n')
+    case 'rev-list':
+      return args.includes('--count') ? ok('0\n') : ok('c1\n')
+    case 'log':
+      if (args.includes('-g')) return ok(day('HEAD@{1795000050}', 'c1', 'commit (initial): Start'))
+      if (args.includes('--max-parents=0')) return ok('1795000050\n')
+      return ok(rec('c1', '', 'HEAD -> refs/heads/main', 'Start'))
+    default:
+      return ok('')
+  }
+}
+
+async function nowLine($: Parameters<TestBody>[0], on: Parameters<TestBody>[1], answer: (argv: readonly string[]) => unknown) {
+  mock.clock(on)
+  on('command.register', () => ({ value: { command: 'git-tracking' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [] }))
+  on('session.cwd', () => ({ value: 'C:/Projekte/Demo' }))
+  on('session.surfaces', () => ({ value: ['desktop'] }))
+  on('process.run', (_, e) => ({ value: answer(e.argv) }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.run', () => ({ text: '' }))
+  await $.session.start({ cwd: 'C:/Projekte/Demo', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'git-tracking', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const all = async () => (await ui.findAll({ type: 'Text' })).map(t => t.text).join(' | ')
+  let texts = await all()
+  for (let i = 0; i < 20 && !texts.includes('Jetzt'); i++) texts = await all()
+  await ui.unmount()
+  return texts
+}
+
+test('Drei Ebenen: ohne GitHub-Ablage behauptet „Jetzt“ kein Hochladen und Abholen', { options: { language: 'de' } }, async ($, on) => {
+  const texts = await nowLine($, on, answerLocal)
+  expect(texts).toContain('nur lokal, keine GitHub-Ablage')
+  expect(texts).toContain('| alles festgehalten, nur auf diesem PC |')
+  expect(texts).not.toContain('alles festgehalten, hochgeladen')
+})
+
+test('Drei Ebenen: mit GitHub-Ablage und nichts offen heißt „Jetzt“ hochgeladen und abgeholt', { options: { language: 'de' } }, async ($, on) => {
+  const texts = await nowLine($, on, answerClean)
+  // Bei 60 Spalten Breite gekürzt
+  expect(texts).toContain('| alles festgehalten, hochgeladen und a')
+  expect(texts).not.toContain('nur auf diesem PC')
+})
+
 // ---------------------------------------------------------------- Anderer Ordner, Ordnerwahl, An Claude geben
 
 const NO_GIT = { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository', isStdoutTruncated: false, isStderrTruncated: false }
