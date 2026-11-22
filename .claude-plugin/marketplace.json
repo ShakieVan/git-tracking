@@ -1,0 +1,12 @@
+{
+  "name": "git-tracking",
+  "owner": { "name": "ShakieVan" },
+  "description": "Git-Tracking: the Git state of every project in a Claude Code side pane",
+  "plugins": [
+    {
+      "name": "git-tracking",
+      "source": "./",
+      "description": "Git state of every project in a side pane: three levels (GitHub, PC, folders) and a track plan. English and German."
+    }
+  ]
+}

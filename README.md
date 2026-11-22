@@ -1,5 +1,7 @@
 # Git-Tracking
 
+<img src=".claude-plugin/icon.png" alt="Git-Tracking" width="96" align="right">
+
 *[Deutsch weiter unten](#deutsch)*
 
 A Claude Code plugin that shows the Git state of the current project in a side pane – in every project, updated every 10 seconds and after every command or file change Claude makes. It only reads; it never changes the project.
@@ -26,12 +28,19 @@ English and German. The pane follows the system language; **DE | EN** at the top
 ## Install
 
 ```
-/plugin install git-tracking --marketplace ShakieVan/eigene-mods
+/plugin install git-tracking --marketplace ShakieVan/git-tracking
 ```
 
-Answer `y` to add the marketplace and pick the user scope (then it runs in every project). From a shell: `claude plugin install git-tracking --marketplace ShakieVan/eigene-mods`. In the desktop app: **+** next to the prompt box → **Plugins** → **Add marketplace** `ShakieVan/eigene-mods` → **Add plugin**.
+Answer `y` to add the marketplace and pick the user scope (then it runs in every project). From a shell: `claude plugin install git-tracking --marketplace ShakieVan/git-tracking`. In the desktop app: **+** next to the prompt box → **Plugins** → **Add marketplace** `ShakieVan/git-tracking` → **Add plugin**.
 
-The repository is private for now: installing needs GitHub access (`gh auth login`, then `gh auth setup-git`).
+## Updates
+
+```
+claude plugin marketplace update git-tracking
+claude plugin update git-tracking@git-tracking
+```
+
+Then `/reload-plugins` in a running session.
 
 ## Command
 
@@ -41,6 +50,10 @@ The repository is private for now: installing needs GitHub access (`gh auth logi
 ## Limits
 
 The reflog is kept by each PC itself, usually for about 90 days. What happens on GitHub (another PC, Claude in the cloud, a merge on the website) shows up only after the next fetch. The log of a removed worktree is gone with it; its commits stay.
+
+## License
+
+Free to use, privately and at work, and free to change and share. Selling it – or a modified copy of it – is not allowed. MIT License with the “Commons Clause” condition, see [LICENSE](LICENSE). This makes Git-Tracking source-available, not open source in the OSI sense.
 
 ---
 
@@ -70,10 +83,10 @@ Deutsch und Englisch. Das Fenster folgt der Sprache des Systems; **DE | EN** obe
 ### Installieren
 
 ```
-/plugin install git-tracking --marketplace ShakieVan/eigene-mods
+/plugin install git-tracking --marketplace ShakieVan/git-tracking
 ```
 
-„Add marketplace?“ mit `y` beantworten und den Bereich „user“ wählen. Aus einer Shell: `claude plugin install git-tracking --marketplace ShakieVan/eigene-mods`. In der Desktop-App: **+** neben dem Eingabefeld → **Plugins** → **Add marketplace** `ShakieVan/eigene-mods` → **Add plugin**. Die Ablage ist vorerst privat; der PC braucht Zugriff auf GitHub (`gh auth login`, dann `gh auth setup-git`).
+„Add marketplace?“ mit `y` beantworten und den Bereich „user“ wählen. Aus einer Shell: `claude plugin install git-tracking --marketplace ShakieVan/git-tracking`. In der Desktop-App: **+** neben dem Eingabefeld → **Plugins** → **Add marketplace** `ShakieVan/git-tracking` → **Add plugin**.
 
 ### Befehl
 
@@ -84,6 +97,15 @@ Deutsch und Englisch. Das Fenster folgt der Sprache des Systems; **DE | EN** obe
 
 Das Tagebuch führt jeder PC selbst, meist für etwa 90 Tage. Was bei GitHub passiert (anderer PC, Claude in der Cloud, Zusammenführen auf der Webseite), sieht dieser PC erst beim Abholen. Das Tagebuch eines gelöschten Arbeitsverzeichnisses ist mit ihm weg; seine Speicherstände bleiben.
 
-### Nach Änderungen
+### Neue Fassungen
 
-Claude Code liest die Erweiterung direkt aus dem Ordner (auf dem Entwicklungs-PC). Eine geänderte Fassung gilt in jeder neuen Sitzung; in einer laufenden Sitzung nach `/reload-plugins`. Für andere PCs: `version` in `.claude-plugin/plugin.json` erhöhen, festhalten und hochladen; dort `claude plugin marketplace update eigene-mods` und `claude plugin update git-tracking@eigene-mods`.
+```
+claude plugin marketplace update git-tracking
+claude plugin update git-tracking@git-tracking
+```
+
+Danach in einer laufenden Sitzung `/reload-plugins`.
+
+### Lizenz
+
+Frei nutzbar, privat und beruflich, darf verändert und weitergegeben werden. Verkaufen ist nicht erlaubt – auch nicht als abgewandelte Kopie. MIT-Lizenz mit der Bedingung „Commons Clause“, siehe [LICENSE](LICENSE). Damit ist Git-Tracking quelloffen einsehbar, aber keine Open-Source-Software im strengen Sinn (OSI).

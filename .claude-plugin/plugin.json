@@ -3,6 +3,9 @@
   "version": "0.3.0",
   "description": "Shows the Git state of every project in a side pane: three levels (GitHub, PC, folders) from the reflog and a track plan of branches and commits. In English and German.",
   "author": { "name": "ShakieVan" },
+  "homepage": "https://github.com/ShakieVan/git-tracking",
+  "repository": "https://github.com/ShakieVan/git-tracking",
+  "keywords": ["git", "reflog", "branches", "visualization", "side pane"],
   "types": "./types/index.d.ts",
   "userConfig": {
     "language": {
