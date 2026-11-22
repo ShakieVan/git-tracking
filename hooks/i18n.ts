@@ -164,6 +164,10 @@ export type Texts = {
     pushed: (b: string) => string
     fetched: (r: string) => string
     fetchedNoLocal: string
+    mergedOnGitHub: (b: string) => string
+    mergedElsewhere: (b: string) => string
+    pullRequest: (n: number) => string
+    elsewhereHint: string
     folderCreated: (f: string) => string
     withBranch: (b: string) => string
     folderTakes: (f: string, b: string | null) => string
@@ -370,7 +374,7 @@ const de: Texts = {
   arrowYellow: 'gelb, zwischen GitHub und PC: nach links = hochgeladen (push), nach rechts = abgeholt (fetch/pull)',
   arrowGreen: 'grün, zwischen PC und Ordner: nach links = festgehalten (commit), nach rechts = in den Ordner geholt (checkout)',
   levelsLegend:
-    '✕ = Zweig gelöscht · grauer Stummel = verworfen (zurückgesetzt, nachträglich geändert, umgeschrieben) · graue gestrichelte Spur = frühere Ordner, z. B. beendete Claude-Sitzungen · Was bei GitHub passiert, sieht dieser PC erst beim Abholen · Klick auf eine Zeile: Details und Fragen',
+    '✕ = Zweig gelöscht · Linie läuft aus = auf dem Zweig ist nichts mehr offen (zusammengeführt, hochgeladen) · grauer Stummel = verworfen (zurückgesetzt, nachträglich geändert, umgeschrieben) · graue gestrichelte Spur = frühere Ordner, z. B. beendete Claude-Sitzungen · Was bei GitHub passiert (z. B. Zusammenführen auf der Webseite), sieht dieser PC erst beim Abholen · Klick auf eine Zeile: Details und Fragen',
   hiddenEvents: n => ` · ${n} Ereignisse auf weiteren Zweigen nicht gezeigt`,
   ev: {
     noBranch: 'ohne Zweig',
@@ -387,6 +391,10 @@ const de: Texts = {
     pushed: b => `Hochgeladen (${b})`,
     fetched: r => `Von GitHub abgeholt (${r})`,
     fetchedNoLocal: 'nur bei GitHub, hier kein gleichnamiger Zweig',
+    mergedOnGitHub: b => `Bei GitHub zusammengeführt → ${b}`,
+    mergedElsewhere: b => `Woanders zusammengeführt → ${b}`,
+    pullRequest: n => `Änderungsvorschlag #${n}`,
+    elsewhereHint: 'auf einem anderen Rechner oder bei GitHub',
     folderCreated: f => `Ordner angelegt: ${f}`,
     withBranch: b => `mit Zweig ${b}`,
     folderTakes: (f, b) => `${f} holt ${b ?? 'Stand ohne Zweig'}`,
@@ -623,7 +631,7 @@ const en: Texts = {
   arrowYellow: 'yellow, between GitHub and PC: to the left = pushed, to the right = fetched/pulled',
   arrowGreen: 'green, between PC and folder: to the left = committed, to the right = checked out into the folder',
   levelsLegend:
-    '✕ = branch deleted · grey stub = discarded (reset, amended, rebased) · grey dashed lane = former folders, e.g. finished Claude sessions · What happens on GitHub shows up on this PC only after a fetch · Click a row: details and questions',
+    '✕ = branch deleted · line fading out = nothing open on that branch (merged, pushed) · grey stub = discarded (reset, amended, rebased) · grey dashed lane = former folders, e.g. finished Claude sessions · What happens on GitHub (e.g. a merge on the website) shows up on this PC only after a fetch · Click a row: details and questions',
   hiddenEvents: n => ` · ${n} events on further branches not shown`,
   ev: {
     noBranch: 'no branch',
@@ -640,6 +648,10 @@ const en: Texts = {
     pushed: b => `Pushed (${b})`,
     fetched: r => `Fetched from GitHub (${r})`,
     fetchedNoLocal: 'only on GitHub, no local branch of that name',
+    mergedOnGitHub: b => `Merged on GitHub → ${b}`,
+    mergedElsewhere: b => `Merged elsewhere → ${b}`,
+    pullRequest: n => `pull request #${n}`,
+    elsewhereHint: 'on another PC or on GitHub',
     folderCreated: f => `Worktree created: ${f}`,
     withBranch: b => `with branch ${b}`,
     folderTakes: (f, b) => `${f} checks out ${b ?? 'a detached state'}`,

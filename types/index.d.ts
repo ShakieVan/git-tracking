@@ -104,6 +104,15 @@ export type DiaryTrack = {
   behind: number
 }
 
+/** Ein Zusammenführen auf dem Hauptzweig bei GitHub (git log --first-parent --merges) */
+export type DiaryMerge = {
+  hash: string
+  parents: string[]
+  /** Sekunden seit 1970 (Zeit des Zusammenführens) */
+  time: number
+  subject: string
+}
+
 export type GleisDiary = {
   entries: DiaryEntry[]
   folders: DiaryFolder[]
@@ -112,6 +121,12 @@ export type GleisDiary = {
   remoteBranches: string[]
   /** Zeit des ältesten Speicherstands, um zu sagen, ob es Älteres als das Tagebuch gibt */
   oldestCommit: number | null
+  /** Der Hauptzweig bei GitHub, z. B. origin/main; null, wenn es ihn dort nicht gibt */
+  mainRemote: string | null
+  /** Zusammenführungen auf mainRemote (neueste zuerst); auch solche, die bei GitHub oder woanders entstanden */
+  remoteMerges: DiaryMerge[]
+  /** GitHub-Zweige, die noch nicht in mainRemote zusammengeführt sind, z. B. origin/x */
+  unmergedRemote: string[]
 }
 
 export type GleisView = {

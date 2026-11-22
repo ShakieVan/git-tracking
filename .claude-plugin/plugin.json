@@ -1,6 +1,6 @@
 {
   "name": "git-tracking",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Shows the Git state of every project in a side pane: three levels (GitHub, PC, folders) from the reflog and a track plan of branches and commits. Gives Claude a short Git summary when a conversation starts. In English and German.",
   "author": {
     "name": "ShakieVan"

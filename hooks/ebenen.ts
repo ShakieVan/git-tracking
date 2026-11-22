@@ -4,8 +4,8 @@
  * hochgeladen, abgeholt, umgeschaltet oder zurückgesetzt wurde – auf diesem PC,
  * meist für die letzten etwa 90 Tage. Reine Logik, kein `$`.
  */
-import type { DiaryEntry, DiaryFolder, DiaryTrack, GleisDiary } from '../types'
-import { iconBody } from './graph'
+import type { DiaryEntry, DiaryFolder, DiaryMerge, DiaryTrack, GleisDiary } from '../types'
+import { iconBody, parseMergeSubject } from './graph'
 import type { IconKind } from './graph'
 import type { Texts } from './i18n'
 
@@ -29,12 +29,13 @@ export function parseDiary(stdout: string, headRef: string): DiaryEntry[] {
   return out
 }
 
-/** Liest `git for-each-ref --format=%(refname:short)%09%(objectname)%09%(upstream:short)%09%(upstream:track) refs/heads` */
+/** Liest `git for-each-ref --format=%(refname)%09%(objectname)%09%(upstream:short)%09%(upstream:track) refs/heads` */
 export function parseTrack(stdout: string): DiaryTrack[] {
   const out: DiaryTrack[] = []
   for (const line of stdout.replace(/\r/g, '').split('\n')) {
     if (!line.trim()) continue
-    const [branch, tip, upstream, track] = line.split('\t')
+    const [ref, tip, upstream, track] = line.split('\t')
+    const branch = ref?.replace(/^refs\/heads\//, '')
     if (!branch) continue
     const gone = /gone/.test(track ?? '')
     out.push({
@@ -44,6 +45,17 @@ export function parseTrack(stdout: string): DiaryTrack[] {
       ahead: Number(/ahead (\d+)/.exec(track ?? '')?.[1] ?? 0),
       behind: Number(/behind (\d+)/.exec(track ?? '')?.[1] ?? 0),
     })
+  }
+  return out
+}
+
+/** Liest `git log --first-parent --merges --format=%H%x1f%P%x1f%ct%x1f%s <GitHub-Hauptzweig>` */
+export function parseMerges(stdout: string): DiaryMerge[] {
+  const out: DiaryMerge[] = []
+  for (const line of stdout.replace(/\r/g, '').split('\n')) {
+    const [hash, parents, time, subject] = line.split('\x1f')
+    if (!hash || !parents || !time) continue
+    out.push({ hash, parents: parents.split(' ').filter(Boolean), time: Number(time), subject: subject ?? '' })
   }
   return out
 }
@@ -62,6 +74,8 @@ export type EventKind =
   | 'clone'
   | 'push'
   | 'fetch'
+  /** Bei GitHub (Änderungsvorschlag) oder auf einem anderen Rechner zusammengeführt; erst nach dem Abholen bekannt */
+  | 'remotemerge'
   | 'other'
 
 type Classified = { kind: EventKind; subject: string; from?: string; to?: string; initial?: boolean }
@@ -111,6 +125,17 @@ export type DiaryEvent = {
   creates: ('branch' | 'remote' | 'folder')[]
   /** Gleich danach hochgeladen nach (z. B. origin/main) */
   pushed: string | null
+  /** Bei GitHub zusammengeführt: Nummer des Änderungsvorschlags (pull request) */
+  pr: number | null
+}
+
+/** Bei GitHub zusammengeführt: der Zweig, mit GitHub-Ablage davor (origin/x), wenn dieser PC ihn noch kennt */
+function remoteSource(ev: DiaryEvent): { name: string; lane: string | null } | null {
+  if (ev.kind !== 'remotemerge' || !ev.from) return null
+  const prefix = ev.remote ? ev.remote.slice(0, ev.remote.indexOf('/') + 1) : ''
+  return prefix && ev.from.startsWith(prefix)
+    ? { name: ev.from.slice(prefix.length), lane: `r:${ev.from}` }
+    : { name: ev.from, lane: null }
 }
 
 /**
@@ -137,8 +162,63 @@ function mk(c: Classified, en: DiaryEntry, part: Partial<DiaryEvent>): DiaryEven
     from: c.from ?? null,
     creates: [],
     pushed: null,
+    pr: null,
     ...part,
   }
+}
+
+/**
+ * Zusammenführungen auf dem GitHub-Hauptzweig, die nicht auf diesem PC entstanden sind
+ * (Änderungsvorschlag auf der Webseite, anderer Rechner). Das Tagebuch kennt davon nur das
+ * Abholen; die Speicherstände selbst verraten, was zusammengeführt wurde.
+ */
+export function remoteMergeEvents(diary: GleisDiary): DiaryEvent[] {
+  const target = diary.mainRemote
+  if (!target || diary.remoteMerges.length === 0 || diary.entries.length === 0) return []
+  const start = Math.min(...diary.entries.map(e => e.time))
+  const remote = target.slice(0, target.indexOf('/'))
+  const mainName = target.slice(remote.length + 1)
+  // Hier entstanden: echtes Zusammenführen im Tagebuch eines Zweigs oder Ordners, oder von hier hochgeladen
+  const madeHere = new Set<string>()
+  const byHash = new Map<string, DiaryEntry[]>()
+  for (const e of diary.entries) {
+    const here = e.ref.startsWith('remotes/') ? /^update by push/.test(e.msg) : /: Merge made by|^commit \(merge\)/.test(e.msg)
+    if (here) madeHere.add(e.hash)
+    const list = byHash.get(e.hash)
+    if (list) list.push(e)
+    else byHash.set(e.hash, [e])
+  }
+  const out: DiaryEvent[] = []
+  for (const m of diary.remoteMerges) {
+    if (m.time < start - 60 || m.parents.length < 2 || madeHere.has(m.hash)) continue
+    // Welcher Zweig: aus dem Betreff, sonst aus dem Tagebuch (wer stand auf dem zweiten Elternteil)
+    let branch = parseMergeSubject(m.subject)?.from ?? null
+    if (!branch) {
+      const seen = byHash.get(m.parents[1]!) ?? []
+      const hit = seen.find(e => e.ref.startsWith('remotes/')) ?? seen.find(e => e.ref.startsWith('heads/'))
+      if (hit) branch = hit.ref.startsWith('heads/') ? hit.ref.slice(6) : hit.ref.slice(hit.ref.indexOf('/', 8) + 1)
+    }
+    // „Merge branch 'main' of …“: ein anderer Rechner hat nur seinen Stand mit GitHub vereint
+    if (branch === mainName) continue
+    const pr = /^Merge pull request #(\d+)/.exec(m.subject)
+    // Nur ein GitHub-Zweig, den dieser PC noch kennt, bekommt eine Spur; sonst bleibt nur der Name
+    const known = branch !== null && diary.remoteBranches.includes(`${remote}/${branch}`)
+    out.push({
+      kind: 'remotemerge',
+      time: m.time,
+      hash: m.hash,
+      subject: m.subject,
+      initial: false,
+      branch: null,
+      remote: target,
+      folder: null,
+      from: known ? `${remote}/${branch}` : branch,
+      creates: [],
+      pushed: null,
+      pr: pr ? Number(pr[1]) : null,
+    })
+  }
+  return out
 }
 
 /** Macht aus allen Tagebüchern eine Liste von Ereignissen, neueste zuerst */
@@ -261,8 +341,12 @@ export function diaryEvents(diary: GleisDiary, branches: string[]): DiaryEvent[]
     }
   }
 
-  // 6. Sortieren; Hochladen gleich nach dem Festhalten in dieselbe Zeile
-  const rank = (e: DiaryEvent) => (e.kind === 'push' || e.kind === 'fetch' ? 0 : 1)
+  // 5b. Bei GitHub oder woanders zusammengeführt (steht in keinem Tagebuch dieses PCs)
+  events.push(...remoteMergeEvents(diary))
+
+  // 6. Sortieren; Hochladen gleich nach dem Festhalten in dieselbe Zeile. In derselben Sekunde
+  // kommt das Anlegen eines Zweigs zuerst (unten), sonst reicht seine Spur über den Anfang hinaus
+  const rank = (e: DiaryEvent) => (e.kind === 'push' || e.kind === 'fetch' ? 0 : e.kind === 'create' ? 2 : 1)
   events.sort((a, b) => b.time - a.time || rank(a) - rank(b))
   const out: DiaryEvent[] = []
   for (let i = 0; i < events.length; i++) {
@@ -294,6 +378,8 @@ export type EbenenLane = {
   name: string
   /** Gibt es jetzt noch */
   exists: boolean
+  /** Gibt es noch, aber nichts ist offen (zusammengeführt, hochgeladen, in keinem Ordner): endet am letzten Ereignis */
+  idle: boolean
   /** Oberste und unterste Zeile, in der die Spur zu sehen ist */
   top: number
   bottom: number
@@ -318,6 +404,8 @@ export type ModelOptions = {
   mainBranch: string | null
   branches: string[]
   current: string | null
+  /** Lokale Zweige, die noch nicht in den Hauptzweig zusammengeführt sind */
+  unmerged: string[]
   limit: number
   compact: boolean
   t: Texts
@@ -332,6 +420,41 @@ function sourceKey(ev: DiaryEvent, main: string | null): string | null {
   return `b:${f}`
 }
 
+/** Die Spur, die in diesem Ereignis in eine andere mündet (Zusammenführen), sonst null */
+export function mergedLane(ev: DiaryEvent): string | null {
+  if (ev.kind === 'remotemerge') return remoteSource(ev)?.lane ?? null
+  if (ev.kind === 'merge' && ev.from && !ev.from.startsWith('origin/') && !isHash(ev.from) && ev.from !== ev.branch) {
+    return `b:${ev.from}`
+  }
+  return null
+}
+
+/**
+ * Spuren, auf denen noch etwas offen ist; sie reichen bis „Jetzt“. Alle anderen enden an
+ * ihrem letzten Ereignis. Ohne Hauptzweig lässt sich das nicht beurteilen: dann sind alle offen.
+ */
+function openLanes(diary: GleisDiary, opt: ModelOptions): (key: string) => boolean {
+  const main = opt.mainBranch
+  const open = new Set<string>()
+  if (main) open.add(`b:${main}`)
+  if (diary.mainRemote) open.add(`r:${diary.mainRemote}`)
+  if (opt.current) open.add(`b:${opt.current}`)
+  for (const f of diary.folders) if (f.branch) open.add(`b:${f.branch}`)
+  for (const b of opt.unmerged) open.add(`b:${b}`)
+  for (const r of diary.unmergedRemote) open.add(`r:${r}`)
+  for (const tr of diary.track) {
+    if (tr.ahead > 0 || tr.behind > 0) {
+      open.add(`b:${tr.branch}`)
+      if (tr.upstream) open.add(`r:${tr.upstream}`)
+    }
+  }
+  return key => {
+    if (key.startsWith('f:')) return true
+    if (key.startsWith('r:')) return !diary.mainRemote || open.has(key)
+    return !main || open.has(key)
+  }
+}
+
 /** Die Spuren, die ein Ereignis berührt, und die, zu der es gehört */
 export function laneKeysOf(ev: DiaryEvent, main: string | null): { keys: string[]; primary: string | null } {
   const keys: string[] = []
@@ -342,14 +465,14 @@ export function laneKeysOf(ev: DiaryEvent, main: string | null): { keys: string[
   if (r) keys.push(r)
   if (ev.pushed) keys.push(`r:${ev.pushed}`)
   if (f) keys.push(f)
-  if (ev.kind === 'merge' && ev.from && !ev.from.startsWith('origin/') && !isHash(ev.from) && ev.from !== ev.branch) {
-    keys.push(`b:${ev.from}`)
-  }
+  const merged = mergedLane(ev)
+  if (merged) keys.push(merged)
   if (ev.kind === 'create') {
     const s = sourceKey(ev, main)
     if (s) keys.push(s)
   }
-  const primary = ev.kind === 'push' || ev.kind === 'fetch' ? r : ev.kind === 'checkout' ? f : b ?? f ?? r
+  const primary =
+    ev.kind === 'push' || ev.kind === 'fetch' || ev.kind === 'remotemerge' ? r : ev.kind === 'checkout' ? f : b ?? f ?? r
   return { keys: [...new Set(keys)], primary }
 }
 
@@ -434,6 +557,7 @@ export function ebenenModel(events: DiaryEvent[], diary: GleisDiary, opt: ModelO
   })
   const folderName = (i: number) =>
     i < 0 ? opt.t.formerFolders : diary.folders[i]?.isMain ? opt.t.mainFolder : (diary.folders[i]?.name ?? opt.t.folderGeneric)
+  const isOpen = openLanes(diary, opt)
   const lanes: EbenenLane[] = []
   for (const key of [...gh, ...pc, ...fo]) {
     const t = touched.get(key) ?? []
@@ -441,13 +565,16 @@ export function ebenenModel(events: DiaryEvent[], diary: GleisDiary, opt: ModelO
     const col: 0 | 1 | 2 = key.startsWith('r:') ? 0 : key.startsWith('b:') ? 1 : 2
     const exists =
       col === 0 ? diary.remoteBranches.includes(id) : col === 1 ? opt.branches.includes(id) : Number(id) >= 0
-    if (!exists && t.length === 0) continue
+    const idle = exists && !isOpen(key)
+    // Ohne Ereignis im gezeigten Ausschnitt gibt es nichts zu zeichnen, außer die Spur reicht bis „Jetzt“
+    if ((!exists || idle) && t.length === 0) continue
     const maxT = t.length > 0 ? Math.max(...t) : 0
     const cr = born.get(key)
-    const top = exists ? 0 : Math.min(...t)
-    const bottom = key === 'f:-1' ? maxT : cr !== undefined && cr >= maxT ? cr : tail
+    const top = exists && !idle ? 0 : Math.min(...t)
+    // Eine Spur, die es nicht mehr gibt, beginnt beim ältesten bekannten Ereignis (ihr Anlegen steht in keinem Tagebuch mehr)
+    const bottom = key === 'f:-1' || !exists ? maxT : cr !== undefined && cr >= maxT ? cr : tail
     const name = col === 0 ? id.slice(id.indexOf('/') + 1) : col === 1 ? id : folderName(Number(id))
-    lanes.push({ key, col, name, exists, top, bottom: Math.max(top, bottom) })
+    lanes.push({ key, col, name, exists, idle, top, bottom: Math.max(top, bottom) })
   }
   return { lanes, rows, hidden, hasMore }
 }
@@ -563,6 +690,9 @@ export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawin
   const icon = (kind: IconKind, cx: number, cy: number, color: string, size = 15) =>
     `<svg x="${cx - size / 2}" y="${cy - size / 2}" width="${size}" height="${size}" viewBox="0 0 24 24">${iconBody(kind, color)}</svg>`
 
+  /** Welche Spur in Zeile r in eine andere mündet (Zusammenführen) */
+  const mergedAt = model.rows.map(row => (row.kind === 'event' ? mergedLane(row.ev) : null))
+
   /** Die Spuren, die durch Zeile r laufen */
   const lanesThrough = (r: number, h: number, yc: number, fade: boolean) =>
     model.lanes
@@ -571,11 +701,19 @@ export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawin
         const lx = xs.get(l.key)!
         const color = l.key === 'f:-1' ? GREY : COLS[l.col]!
         const dash = l.key === 'f:-1' ? 'stroke-dasharray="4 4"' : fade ? 'stroke-dasharray="2 3" stroke-opacity="0.6"' : ''
-        const y1 = r === l.top ? (r === 0 ? h / 2 + 7 : yc) : 0
+        // Mündet die Spur an ihrem oberen Ende in eine andere, ist die Schräge dorthin ihr Ende
+        const intoOther = r === l.top && r > 0 && mergedAt[r] === l.key
+        const end = intoOther ? h - 3 : yc
+        const y1 = r === l.top ? (r === 0 ? h / 2 + 7 : end) : 0
         const y2 = r === l.bottom ? yc : h
         let s = y2 > y1 ? line(lx, y1, lx, y2, color, dash) : ''
-        if (r === l.top && r > 0 && !l.exists && l.key !== 'f:-1') {
-          s += `<path d="M${lx - 3.5} ${yc - 12.5} L${lx + 3.5} ${yc - 5.5} M${lx + 3.5} ${yc - 12.5} L${lx - 3.5} ${yc - 5.5}" stroke="${RED}" stroke-width="2" stroke-linecap="round"/>`
+        if (r === l.top && r > 0 && l.key !== 'f:-1') {
+          if (!l.exists) {
+            s += `<path d="M${lx - 3.5} ${end - 12.5} L${lx + 3.5} ${end - 5.5} M${lx + 3.5} ${end - 12.5} L${lx - 3.5} ${end - 5.5}" stroke="${RED}" stroke-width="2" stroke-linecap="round"/>`
+          } else if (l.idle && !intoOther) {
+            // Nichts mehr offen: die Linie läuft nach oben aus
+            s += line(lx, Math.max(1, end - 15), lx, end, color, 'stroke-dasharray="2 3" stroke-opacity="0.45"')
+          }
         }
         return s
       })
@@ -639,6 +777,14 @@ export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawin
         if (xr !== undefined) over += dot(xr, yc, COL_GH)
         if (xb !== undefined) over += ring(xb, yc, COL_PC)
         break
+      case 'remotemerge': {
+        const src = X(mergedLane(ev))
+        if (src !== undefined && xr !== undefined && src !== xr) {
+          under += `<path d="M${src} ${h} L${src} ${h - 3} L${xr} ${yc}" fill="none" stroke="${COL_GH}" stroke-width="3" stroke-linejoin="round"/>`
+        }
+        if (xr !== undefined) over += dot(xr, yc, COL_GH)
+        break
+      }
       case 'pull':
         over += arrow(xr, xb, yc, COL_PC) + arrow(xb, xf, yc, COL_ORD)
         if (xr !== undefined) over += ring(xr, yc, COL_GH)
@@ -712,6 +858,14 @@ export function eventLines(
       return { title: e.pushed(ev.branch ?? short(ev.remote)), detail: '' }
     case 'fetch':
       return { title: e.fetched(short(ev.remote)), detail: ev.branch ? '' : e.fetchedNoLocal }
+    case 'remotemerge': {
+      const source = remoteSource(ev)
+      const parts = [source ? e.mergedFrom(source.name) : '', ev.pr !== null ? e.pullRequest(ev.pr) : e.elsewhereHint]
+      return {
+        title: ev.pr !== null ? e.mergedOnGitHub(short(ev.remote)) : e.mergedElsewhere(short(ev.remote)),
+        detail: parts.filter(Boolean).join(' · '),
+      }
+    }
     case 'checkout':
       if (ev.creates.includes('folder') && ev.folder !== null && ev.folder > 0) {
         return { title: e.folderCreated(folderName(ev.folder)), detail: ev.branch ? e.withBranch(ev.branch) : '' }

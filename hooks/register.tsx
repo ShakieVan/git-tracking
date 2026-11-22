@@ -39,6 +39,7 @@ import {
   eventKey,
   eventLines,
   parseDiary,
+  parseMerges,
   parseTrack,
 } from './ebenen'
 import type { DiaryEvent, EbenenRow } from './ebenen'
@@ -119,6 +120,7 @@ function emptySnapshot(folder: string, error: string | null): GleisSnapshot {
 type Git = (args: string[], cwd: string) => ReturnType<EngineInterface['process']['run']>
 
 const DIARY_FORMAT = '--format=%gD%x1f%H%x1f%gs'
+const MERGES_FORMAT = '--format=%H%x1f%P%x1f%ct%x1f%s'
 
 /**
  * Liest das Tagebuch (reflog) aller Zweige, der GitHub-Zweige und jedes Ordners:
@@ -131,6 +133,7 @@ async function readDiary(
   branches: string[],
   remoteRefs: string[],
   hereDirty: number,
+  mainBranch: string | null,
 ): Promise<GleisDiary> {
   const list = wts.length > 0 ? wts.slice(0, 6) : [{ path: root, branch: null, head: '', isMain: true, isHere: true }]
   const hereIndex = Math.max(0, list.findIndex(w => w.isHere))
@@ -140,10 +143,17 @@ async function readDiary(
     ...remoteRefs.filter(r => !r.endsWith('/HEAD')).map(r => `refs/remotes/${r}`),
   ]
   const others = list.map((w, i) => ({ w, i })).filter(x => x.i !== hereIndex)
-  const [all, track, roots, ...rest] = await Promise.all([
+  // Der Hauptzweig bei GitHub: was dort zusammengeführt wurde, und welche GitHub-Zweige noch nicht
+  const mainRemote = mainBranch && remoteRefs.includes(`origin/${mainBranch}`) ? `origin/${mainBranch}` : null
+  const [all, track, roots, merges, remoteOpen, ...rest] = await Promise.all([
     git(['log', '-g', '--date=unix', DIARY_FORMAT, '-n4000', ...refs], root),
-    git(['for-each-ref', '--format=%(refname:short)%09%(objectname)%09%(upstream:short)%09%(upstream:track)', 'refs/heads'], root),
+    // Volle Namen: heißen Zweig und GitHub-Ablage gleich, macht Git aus dem kurzen Namen „heads/x“
+    git(['for-each-ref', '--format=%(refname)%09%(objectname)%09%(upstream:short)%09%(upstream:track)', 'refs/heads'], root),
     git(['log', '--all', '--max-parents=0', '--format=%ct'], root),
+    mainRemote ? git(['log', '--first-parent', '--merges', '-n200', MERGES_FORMAT, `refs/remotes/${mainRemote}`], root) : null,
+    mainRemote
+      ? git(['for-each-ref', '--format=%(refname)', `--no-merged=refs/remotes/${mainRemote}`, 'refs/remotes/origin'], root)
+      : null,
     ...others.flatMap(({ w }) => [
       git(['log', '-g', '--date=unix', DIARY_FORMAT, '-n1500', 'HEAD'], w.path),
       git(['status', '--porcelain'], w.path),
@@ -177,6 +187,14 @@ async function readDiary(
     track: track.exitCode === 0 ? parseTrack(track.stdout) : [],
     remoteBranches: remoteRefs.filter(r => !r.endsWith('/HEAD')),
     oldestCommit: times.length > 0 ? Math.min(...times) : null,
+    mainRemote,
+    remoteMerges: merges && merges.exitCode === 0 ? parseMerges(merges.stdout) : [],
+    unmergedRemote:
+      remoteOpen && remoteOpen.exitCode === 0
+        ? lines(remoteOpen.stdout)
+            .filter(r => r.startsWith('refs/remotes/') && !r.endsWith('/HEAD'))
+            .map(r => r.slice(13))
+        : [],
   }
 }
 
@@ -240,13 +258,13 @@ async function readGit($: EngineInterface): Promise<GleisSnapshot> {
   let unmerged: string[] = []
   if (mainBranch) {
     const target = branches.includes(mainBranch) ? `refs/heads/${mainBranch}` : `refs/remotes/origin/${mainBranch}`
-    const nm = await git(['for-each-ref', '--format=%(refname:short)', `--no-merged=${target}`, 'refs/heads'], root)
-    if (nm.exitCode === 0) unmerged = lines(nm.stdout)
+    const nm = await git(['for-each-ref', '--format=%(refname)', `--no-merged=${target}`, 'refs/heads'], root)
+    if (nm.exitCode === 0) unmerged = lines(nm.stdout).map(r => r.replace(/^refs\/heads\//, ''))
   }
 
   const remoteList = lines(remotes.stdout)
   const diary =
-    v.mode === 'ebenen' ? await readDiary(git, root, wts, branches, remoteRefs, st.changed + st.untracked) : null
+    v.mode === 'ebenen' ? await readDiary(git, root, wts, branches, remoteRefs, st.changed + st.untracked, mainBranch) : null
   return {
     folder,
     root,
@@ -1082,6 +1100,7 @@ export const register: Register = (on, options) => {
         mainBranch: snap.mainBranch,
         branches: snap.branches,
         current: snap.branch,
+        unmerged: snap.unmerged,
         limit: v.events,
         compact: v.compact,
         t,
@@ -1223,6 +1242,7 @@ export const register: Register = (on, options) => {
         const marks: RowEvent[] = []
         const about = detail ? `${title} – ${detail}` : title
         if (ev.kind === 'merge') marks.push({ icon: 'merge', color: ICON_GREY, text: about })
+        if (ev.kind === 'remotemerge') marks.push({ icon: 'merge', color: ICON_BLUE, text: about })
         if (ev.kind === 'create') marks.push({ icon: 'branch', color: ICON_GREY, text: about })
         const date = ago(ev.time, now, t)
         out.push(

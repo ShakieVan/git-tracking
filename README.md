@@ -12,6 +12,8 @@ A Claude Code plugin that shows the Git state of the current project in a side p
 - **PC** (yellow): the local branches of the repository
 - **Folders** (green): every worktree – the main folder and additional ones, e.g. from Claude sessions; a grey dashed lane collects former folders that no longer exist
 - Arrows: yellow to the left = pushed, yellow to the right = fetched/pulled; green to the left = committed, green to the right = checked out into the folder
+- A lane reaches “Now” only while something is open on it: not merged into the main branch yet, not pushed or not pulled, or checked out in a folder. Otherwise it fades out after its last event, or bends into the branch it was merged into
+- Merges on GitHub (pull request on the website) or on another PC get their own blue row (“Merged on GitHub → main”), read from the merge commits once they have been fetched
 - ✕ = branch deleted · grey stub = discarded (reset, amended, rebased)
 - The top row (“Now”) marks what is still open: a wrench (work in progress, not committed), a closed envelope (committed, not pushed) and two circular arrows (newer state on GitHub, pull)
 
@@ -68,7 +70,7 @@ Then `/reload-plugins` in a running session.
 
 ## Limits
 
-The reflog is kept by each PC itself, usually for about 90 days. What happens on GitHub (another PC, Claude in the cloud, a merge on the website) shows up only after the next fetch. The log of a removed worktree is gone with it; its commits stay.
+The reflog is kept by each PC itself, usually for about 90 days. What happens on GitHub (another PC, Claude in the cloud, a merge on the website) shows up only after the next fetch. Merges on GitHub are recognised by their merge commit; “squash” and “rebase” merges leave none and do not get a row of their own. Deleting a branch deletes its reflog too: the row “New branch …” disappears, and the lane ends at the oldest event still known. The log of a removed worktree is gone with it; its commits stay.
 
 ## License
 
@@ -88,6 +90,8 @@ Eine Erweiterung für Claude Code. Sie zeigt in jedem Projekt in einem Seitenfen
 - **PC** (gelb): die Entwicklungszweige der Ablage auf diesem PC
 - **Ordner** (grün): jedes Arbeitsverzeichnis (Hauptordner und zusätzliche, z. B. von Claude-Sitzungen); graue gestrichelte Spur = frühere Ordner, die es nicht mehr gibt
 - Pfeile: gelb nach links = hochgeladen (push), gelb nach rechts = abgeholt (fetch/pull); grün nach links = festgehalten (commit), grün nach rechts = in den Ordner geholt (checkout)
+- Eine Spur reicht nur bis „Jetzt“, solange auf ihr etwas offen ist: noch nicht in den Hauptzweig zusammengeführt, noch nicht hochgeladen oder abgeholt, oder ein Ordner arbeitet darauf. Sonst läuft sie nach ihrem letzten Ereignis aus oder biegt in den Zweig ein, in den sie zusammengeführt wurde
+- Zusammenführen bei GitHub (Änderungsvorschlag auf der Webseite) oder auf einem anderen Rechner bekommt eine eigene blaue Zeile („Bei GitHub zusammengeführt → main“), erkannt an den Speicherständen, sobald sie abgeholt sind
 - ✕ = Zweig gelöscht · grauer Stummel = verworfen (zurückgesetzt, nachträglich geändert, umgeschrieben)
 - Oberste Zeile („Jetzt“): Schraubenschlüssel = in Arbeit, noch nicht festgehalten · geschlossener Briefumschlag = festgehalten, noch nicht hochgeladen · zwei Halbkreis-Pfeile = neuerer Stand bei GitHub, abholen
 
@@ -135,7 +139,7 @@ Deutsch und Englisch. Das Fenster folgt der Sprache des Systems; **DE | EN** obe
 
 ### Grenzen
 
-Das Tagebuch führt jeder PC selbst, meist für etwa 90 Tage. Was bei GitHub passiert (anderer PC, Claude in der Cloud, Zusammenführen auf der Webseite), sieht dieser PC erst beim Abholen. Das Tagebuch eines gelöschten Arbeitsverzeichnisses ist mit ihm weg; seine Speicherstände bleiben.
+Das Tagebuch führt jeder PC selbst, meist für etwa 90 Tage. Was bei GitHub passiert (anderer PC, Claude in der Cloud, Zusammenführen auf der Webseite), sieht dieser PC erst beim Abholen. Zusammenführen bei GitHub erkennt die Ansicht am Zusammenführungs-Speicherstand; „Squash“- und „Rebase“-Zusammenführen hinterlassen keinen und bekommen keine eigene Zeile. Wer einen Zweig löscht, löscht auch sein Tagebuch: Die Zeile „Neuer Zweig …“ verschwindet, und die Spur beginnt beim ältesten noch bekannten Ereignis. Das Tagebuch eines gelöschten Arbeitsverzeichnisses ist mit ihm weg; seine Speicherstände bleiben.
 
 ### Neue Fassungen
 

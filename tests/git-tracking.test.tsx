@@ -1,7 +1,11 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
+import { diaryEvents, ebenenModel, ebenenSlices, eventLines, mergedLane, parseMerges } from '../hooks/ebenen'
+import type { DiaryEvent } from '../hooks/ebenen'
+import { texts } from '../hooks/i18n'
 import { encodePowerShell, pickedFolder, pickerCommand } from '../hooks/ordnerwahl'
+import type { DiaryEntry, GleisDiary } from '../types'
 
 const PANE = {
   plugin: 'git-tracking',
@@ -62,6 +66,8 @@ function answerGit(argv: readonly string[]) {
     case 'status':
       return ok(STATUS)
     case 'log':
+      // Zusammenführungen auf origin/main: c3 entstand hier (steht im Tagebuch), also keine GitHub-Zeile
+      if (args.includes('--merges')) return ok(['c3', 'c2 f1', '1795000500', 'Merge feature'].join(US) + '\n')
       if (args.includes('-g')) return ok(args.some(a => a.startsWith('refs/heads/')) ? DIARY : DIARY_X)
       if (args.includes('--max-parents=0')) return ok('1795000050\n')
       return args.includes('--graph') ? ok('* c3 (HEAD -> main) Merge feature\n') : ok(LOG)
@@ -85,11 +91,12 @@ function answerGit(argv: readonly string[]) {
         )
       }
       if (args.some(a => a.startsWith('--merged='))) return ok('refs/heads/main\nrefs/remotes/origin/main\nrefs/remotes/origin/alt\n')
+      if (args.some(a => a.startsWith('--no-merged=refs/remotes/'))) return ok('refs/remotes/origin/HEAD\nrefs/remotes/origin/feature\n')
       if (args.some(a => a.includes('upstream:track'))) {
-        return ok('main\tc3\torigin/main\t[ahead 2, behind 1]\nfeature\tf1\torigin/feature\t\n')
+        return ok('refs/heads/main\tc3\torigin/main\t[ahead 2, behind 1]\nrefs/heads/feature\tf1\torigin/feature\t\n')
       }
       return args.some(a => a.startsWith('--no-merged'))
-        ? ok('feature\n')
+        ? ok('refs/heads/feature\n')
         : ok('refs/heads/main\nrefs/heads/feature\nrefs/remotes/origin/main\nrefs/remotes/origin/feature\n')
     case 'rev-list':
       if (args.includes('--count')) return ok('2\n')
@@ -239,6 +246,9 @@ test('Drei Ebenen (voreingestellt) zeigt GitHub, PC und Ordner mit den Ereigniss
   expect(texts).toContain('Erster Speicherstand')
   expect(texts).toContain('Main work')
   expect(texts).not.toContain('Hochgeladen (main)')
+  // Hier zusammengeführt und hochgeladen: keine Zeile „bei GitHub“
+  expect(texts).not.toContain('Bei GitHub zusammengeführt')
+  expect(texts).not.toContain('Woanders zusammengeführt')
   // Zeichen oben: Schraubenschlüssel, Briefumschlag, Aktualisieren
   expect(await ui.find({ key: 'zeichen-jetzt-work' })).toBeDefined()
   expect(await ui.find({ key: 'zeichen-jetzt-push' })).toBeDefined()
@@ -550,4 +560,93 @@ test('Fenstertitel mit der Fassung aus plugin.json', { options: { language: 'de'
   await $.session.start({ cwd: 'C:/Projekte/Demo', surface: 'desktop', isInteractive: true })
   await $.command.run({ ...CMD, args: '' })
   expect(titles).toContain('Git-Tracking 9.8.7')
+})
+
+test('Drei Ebenen: bei GitHub zusammengeführt wird erkannt, erledigte Zweige laufen aus', async () => {
+  // Zweig feat hochgeladen, bei GitHub per Änderungsvorschlag zusammengeführt (m1), dann abgeholt
+  const en = (ref: string, hash: string, time: number, msg: string): DiaryEntry => ({ ref, hash, time, msg })
+  const diary: GleisDiary = {
+    entries: [
+      en('heads/main', 'c1', 100, 'commit (initial): Start'),
+      en('folder:0', 'c1', 100, 'commit (initial): Start'),
+      en('remotes/origin/main', 'c1', 110, 'update by push'),
+      en('heads/feat', 'c1', 200, 'branch: Created from main'),
+      en('folder:0', 'c1', 200, 'checkout: moving from main to feat'),
+      en('heads/feat', 'f1', 300, 'commit: Feat work'),
+      en('folder:0', 'f1', 300, 'commit: Feat work'),
+      en('remotes/origin/feat', 'f1', 310, 'update by push'),
+      en('folder:0', 'c1', 320, 'checkout: moving from feat to main'),
+      en('remotes/origin/main', 'x9', 330, 'update by push'),
+      en('remotes/origin/main', 'm1', 500, 'fetch: fast-forward'),
+      en('heads/main', 'm1', 510, 'pull: Fast-forward'),
+      en('folder:0', 'm1', 510, 'pull: Fast-forward'),
+    ],
+    folders: [{ path: 'C:/P', name: 'P', branch: 'main', isMain: true, dirty: 0 }],
+    track: [
+      { branch: 'main', tip: 'm1', upstream: 'origin/main', ahead: 0, behind: 0 },
+      { branch: 'feat', tip: 'f1', upstream: 'origin/feat', ahead: 0, behind: 0 },
+    ],
+    remoteBranches: ['origin/main', 'origin/feat'],
+    oldestCommit: 100,
+    mainRemote: 'origin/main',
+    remoteMerges: [
+      { hash: 'm1', parents: ['x9', 'f1'], time: 400, subject: 'Merge pull request #3 from ShakieVan/feat' },
+      // von hier hochgeladen: entstand auf diesem PC
+      { hash: 'x9', parents: ['c1', 'f0'], time: 330, subject: "Merge branch 'alt'" },
+      // vor dem Tagebuch
+      { hash: 'old', parents: ['a', 'b'], time: 10, subject: "Merge branch 'uralt'" },
+    ],
+    unmergedRemote: [],
+  }
+  const t = texts('de')
+  const evs = diaryEvents(diary, ['main', 'feat'])
+  const gh = evs.filter(e => e.kind === 'remotemerge')
+  expect(gh.length).toBe(1)
+  expect(gh[0]!.from).toBe('origin/feat')
+  expect(gh[0]!.pr).toBe(3)
+  expect(eventLines(gh[0]!, () => 'Hauptordner', 'main', t)).toEqual({
+    title: 'Bei GitHub zusammengeführt → main',
+    detail: 'aus feat · Änderungsvorschlag #3',
+  })
+  // Anlegen und Umschalten in derselben Sekunde: das Anlegen steht darunter
+  const create = evs.findIndex(e => e.kind === 'create')
+  const checkout = evs.findIndex(e => e.kind === 'checkout' && e.branch === 'feat')
+  expect(create).toBeGreaterThan(checkout)
+
+  const opts = { mainBranch: 'main', branches: ['main', 'feat'], current: 'main', unmerged: [] as string[], limit: 50, compact: false, t }
+  const model = ebenenModel(evs, diary, opts)
+  const lane = (k: string) => model.lanes.find(l => l.key === k)
+  const rowOf = (ev: DiaryEvent) => model.rows.findIndex(r => r.kind === 'event' && r.ev === ev)
+  expect(lane('b:main')?.top).toBe(0)
+  expect(lane('r:origin/main')?.top).toBe(0)
+  // feat ist zusammengeführt und hochgeladen: beide Spuren enden, die GitHub-Spur am Zusammenführen
+  expect(lane('r:origin/feat')?.idle).toBe(true)
+  expect(lane('r:origin/feat')?.top).toBe(rowOf(gh[0]!))
+  expect(lane('b:feat')?.idle).toBe(true)
+  expect(lane('b:feat')?.top).toBe(rowOf(evs.find(e => e.kind === 'commit' && e.branch === 'feat')!))
+  // … und reicht nicht unter ihr Anlegen hinaus
+  expect(lane('b:feat')?.bottom).toBe(rowOf(evs[create]!))
+
+  const drawing = ebenenSlices(model, { status: new Map(), selectedRow: null, mainBranch: 'main', t })
+  // Blaue Schräge von feat nach main bei GitHub, auslaufende Linie über dem letzten Festhalten von feat
+  expect(drawing.rows[rowOf(gh[0]!)]!.svg).toContain('stroke="#3b8eea" stroke-width="3" stroke-linejoin="round"')
+  expect(drawing.rows[lane('b:feat')!.top]!.svg).toContain('stroke-opacity="0.45"')
+
+  // Noch nicht zusammengeführt (oder noch nicht hochgeladen): reicht bis „Jetzt“
+  const open = ebenenModel(evs, { ...diary, unmergedRemote: ['origin/feat'] }, { ...opts, unmerged: ['feat'] })
+  expect(open.lanes.find(l => l.key === 'b:feat')?.top).toBe(0)
+  expect(open.lanes.find(l => l.key === 'r:origin/feat')?.top).toBe(0)
+  const ahead = ebenenModel(evs, { ...diary, track: [{ branch: 'feat', tip: 'f2', upstream: 'origin/feat', ahead: 1, behind: 0 }] }, opts)
+  expect(ahead.lanes.find(l => l.key === 'b:feat')?.top).toBe(0)
+
+  // GitHub-Zweig schon gelöscht: Name im Text, aber keine Spur
+  const gone = diaryEvents({ ...diary, remoteBranches: ['origin/main'] }, ['main', 'feat']).find(e => e.kind === 'remotemerge')!
+  expect(mergedLane(gone)).toBeNull()
+  expect(eventLines(gone, () => '', 'main', t).detail).toBe('aus feat · Änderungsvorschlag #3')
+  // Ohne Änderungsvorschlag: woanders zusammengeführt
+  const other = diaryEvents({ ...diary, remoteMerges: [{ hash: 'm1', parents: ['x9', 'f1'], time: 400, subject: "Merge branch 'feat'" }] }, ['main', 'feat'])
+  expect(eventLines(other.find(e => e.kind === 'remotemerge')!, () => '', 'main', texts('en')).title).toBe('Merged elsewhere → main')
+  expect(parseMerges('m1\x1fx9 f1\x1f400\x1fMerge pull request #3 from a/feat\n')).toEqual([
+    { hash: 'm1', parents: ['x9', 'f1'], time: 400, subject: 'Merge pull request #3 from a/feat' },
+  ])
 })
