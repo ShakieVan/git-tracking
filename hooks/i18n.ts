@@ -1,0 +1,501 @@
+/**
+ * All texts of Git-Tracking in German and English.
+ * German uses everyday words for Git (festhalten, hochladen, abholen …) with the
+ * Git term in brackets where it helps; English uses the usual Git terms.
+ */
+import type { IconKind } from './graph'
+
+export type Lang = 'de' | 'en'
+
+const n1 = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+
+export type Texts = {
+  lang: Lang
+  iconName: Record<IconKind, string>
+  // Loading and errors
+  reading: string
+  noGit: string
+  noGitFolder: (folder: string) => string
+  gitStartFailed: (err: string) => string
+  gitError: string
+  otherProjectHint: string
+  // Header
+  conflicts: (n: number) => string
+  notPushed: (n: number) => string
+  notPulled: (n: number) => string
+  filesChanged: (n: number) => string
+  filesNew: (n: number) => string
+  notCommitted: (parts: string) => string
+  stashed: (n: number) => string
+  neverPushed: string
+  localOnly: string
+  allClean: string
+  onMain: (b: string) => string
+  onBranch: (b: string) => string
+  detached: (h: string) => string
+  noCommitYet: string
+  oneTrack: (main: string) => string
+  tracks: (main: string, n: number, unmerged: number) => string
+  worktreesTitle: (n: number) => string
+  worktreeTarget: (branch: string | null, head: string) => string
+  mainWorktree: string
+  andMore: (n: number) => string
+  // Buttons
+  reload: string
+  allEvents: string
+  groupEvents: string
+  allCommits: string
+  onlyStops: string
+  onlyThisBranch: string
+  allBranches: string
+  moreDiary: string
+  moreHistory: string
+  backToProject: string
+  modeLevels: string
+  modePlan: string
+  // Legends
+  symbolsTitle: string
+  iconLegend: Record<IconKind, string>
+  planLegend: string
+  noCommits: string
+  // Plan rows
+  workTip: string
+  workRow: (parts: string) => string
+  gapRow: (n: number) => string
+  colorTitle: string
+  laneMain: string
+  laneUnnamed: string
+  laneIsMain: string
+  laneMerged: string
+  laneUnmerged: string
+  formerLine: (main: string) => string
+  // Pills
+  atGitHub: (name: string, newer: number) => string
+  detachedPill: string
+  // Card and questions
+  readingFiles: string
+  noFileChanges: string
+  questionPlaceholder: string
+  submitLabel: string
+  askHere: string
+  copyForNew: string
+  close: string
+  questionHead: (short: string, project: string, root: string) => string
+  questionMine: (q: string) => string
+  toastAsked: string
+  toastAskStart: string
+  toastNoFill: (dialog: boolean) => string
+  toastCopied: (project: string) => string
+  // Command
+  commandDescription: string
+  commandArg: string
+  shows: (arg: string) => string
+  showsThis: string
+  paneLater: string
+  // Graph texts
+  quoted: (name: string) => string
+  theMain: string
+  unnamedBranch: string
+  otherBranch: string
+  mergeTip: (from: string, into: string) => string
+  branchTip: (names: string[]) => string
+  pushTip: string
+  pullTip: string
+  ago: { now: string; min: (n: number) => string; hours: (n: number) => string; yesterday: string; days: (n: number) => string }
+  refLocal: (name: string, current: boolean, synced: boolean) => string
+  refRemote: (name: string) => string
+  refTag: (name: string) => string
+  refDetached: string
+  refWorktree: (name: string) => string
+  stat: (files: number, plus: string, minus: string) => string
+  binary: string
+  moreFiles: (n: number) => string
+  // Three levels
+  levelTitles: [string, string, string]
+  mainFolder: string
+  formerFolders: string
+  aFormerFolder: string
+  folderGeneric: string
+  diaryLine: string
+  readingDiary: string
+  now: string
+  nowAll: string
+  nowWork: string
+  nowPush: string
+  nowPull: string
+  nowWorkTip: (list: string) => string
+  nowPushTip: (list: string) => string
+  nowPullTip: (list: string) => string
+  dirtyFiles: (n: number) => string
+  neverPushedBranch: (b: string) => string
+  gapEvents: (n: number, pushed: boolean) => string
+  olderEvents: string
+  olderThanDiary: string
+  diaryStart: string
+  arrowsTitle: string
+  arrowYellow: string
+  arrowGreen: string
+  levelsLegend: string
+  hiddenEvents: (n: number) => string
+  ev: {
+    noBranch: string
+    initial: string
+    committed: string
+    committedPushed: string
+    amended: string
+    pushedSuffix: string
+    mergedRemote: string
+    fromGitHub: (x: string) => string
+    mergedInto: (b: string) => string
+    mergedFrom: (x: string) => string
+    pulled: string
+    pushed: (b: string) => string
+    fetched: (r: string) => string
+    fetchedNoLocal: string
+    folderCreated: (f: string) => string
+    withBranch: (b: string) => string
+    folderTakes: (f: string, b: string | null) => string
+    before: (x: string) => string
+    reset: string
+    resetDetail: string
+    rebase: string
+    rebaseDetail: string
+    newBranch: (b: string) => string
+    fromSource: (x: string) => string
+    cloned: string
+  }
+}
+
+const de: Texts = {
+  lang: 'de',
+  iconName: { merge: 'Zusammenführen', branch: 'Abzweig', work: 'In Arbeit', push: 'Hochladen fehlt', pull: 'Abholen fehlt' },
+  reading: 'Lese den Git-Stand …',
+  noGit: 'Kein Git-Projekt',
+  noGitFolder: f => `Der Ordner ${f} ist (noch) nicht mit Git verbunden.`,
+  gitStartFailed: err => `Git ließ sich nicht starten: ${err}`,
+  gitError: 'Git meldet einen Fehler.',
+  otherProjectHint: 'Mit „/git-tracking Ordner“ lässt sich ein anderes Projekt anzeigen.',
+  conflicts: n => `⚠ ${n1(n, 'Konflikt', 'Konflikte')}`,
+  notPushed: n => `${n} noch nicht hochgeladen`,
+  notPulled: n => `${n} noch nicht abgeholt`,
+  filesChanged: n => n1(n, 'Datei geändert', 'Dateien geändert'),
+  filesNew: n => n1(n, 'neue Datei', 'neue Dateien'),
+  notCommitted: p => `${p} – noch nicht festgehalten`,
+  stashed: n => `📦 ${n} beiseitegelegt`,
+  neverPushed: '☁ Zweig noch nie hochgeladen',
+  localOnly: '☁ nur lokal, keine GitHub-Ablage',
+  allClean: '✓ alles festgehalten und hochgeladen',
+  onMain: b => `steht auf dem Hauptzweig ${b}`,
+  onBranch: b => `steht auf Entwicklungszweig ${b}`,
+  detached: h => `ohne Zweig bei ${h}`,
+  noCommitYet: 'noch kein Speicherstand',
+  oneTrack: m => `Nur ein Gleis: alles liegt im Hauptzweig ${m}, keine Entwicklungszweige`,
+  tracks: (m, n, u) =>
+    `Hauptzweig ${m} + ${n1(n, 'Entwicklungszweig', 'Entwicklungszweige')}` +
+    (u > 0 ? `, davon ${u} noch nicht zusammengeführt` : ', alle schon zusammengeführt'),
+  worktreesTitle: n => `Zusätzliche Arbeitsverzeichnisse (${n}):`,
+  worktreeTarget: (b, h) => (b ? `Zweig ${b}` : `ohne Zweig bei ${h}`),
+  mainWorktree: ' (Hauptverzeichnis)',
+  andMore: n => `… und ${n} weitere`,
+  reload: 'Neu laden',
+  allEvents: 'Alle Ereignisse',
+  groupEvents: 'Gleiches zusammenfassen',
+  allCommits: 'Alle Speicherstände',
+  onlyStops: 'Nur Haltepunkte',
+  onlyThisBranch: 'Nur dieser Zweig',
+  allBranches: 'Alle Zweige',
+  moreDiary: 'Mehr Tagebuch',
+  moreHistory: 'Mehr Verlauf',
+  backToProject: 'Zurück zu diesem Projekt',
+  modeLevels: 'Drei Ebenen',
+  modePlan: 'Gleisplan',
+  symbolsTitle: 'Zeichen (Maus darüber zeigt die Erklärung):',
+  iconLegend: {
+    work: 'in Arbeit: im Ordner geändert, noch nicht festgehalten (commit fehlt)',
+    push: 'Brief noch nicht abgeschickt: festgehalten, noch nicht hochgeladen (push fehlt)',
+    pull: 'neuerer Stand bei GitHub: abholen, damit der PC aktuell ist (pull fehlt)',
+    merge: 'zusammengeführt (merge): zwei Zweige werden einer',
+    branch: 'abgezweigt (branch): ein Zweig teilt sich',
+  },
+  planLegend:
+    'Ringe: gestrichelt = nur auf diesem PC, gepunktet = nur bei GitHub, durchgezogen = hier und bei GitHub, ◉ = hier steht das Projekt. ▬ Prellbock = Zweig noch nicht zusammengeführt · gestrichelter Stummel = Zweig ohne eigene Speicherstände · „☁ … bei GitHub“ = so weit ist die GitHub-Ablage · Oben neu, unten alt · Klick auf eine Zeile: Details und Fragen',
+  noCommits: 'Noch keine Speicherstände.',
+  workTip:
+    'In Arbeit: im Projektordner geändert, aber noch in keinem Speicherstand (festhalten / commit fehlt). Diese Änderungen gibt es nur hier.',
+  workRow: p => `Im Ordner: ${p} – noch nicht festgehalten`,
+  gapRow: n => `… ${n} Speicherstände (aufklappen)`,
+  colorTitle: 'Farben der Gleise (jeder Zweig hat seine Farbe, blau ist immer der Hauptzweig):',
+  laneMain: 'Hauptzweig',
+  laneUnnamed: 'Zweig ohne Namen',
+  laneIsMain: ' – Hauptzweig',
+  laneMerged: ' – zusammengeführt',
+  laneUnmerged: ' – noch nicht zusammengeführt',
+  formerLine: m => `${m} (frühere Linie)`,
+  atGitHub: (name, newer) => `☁ ${name} bei GitHub${newer > 0 ? ` (${newer} neuere fehlen dort)` : ''}`,
+  detachedPill: '▶ HEAD (ohne Zweig)',
+  readingFiles: 'Lese die geänderten Dateien …',
+  noFileChanges: 'Keine Dateiänderungen',
+  questionPlaceholder: 'Deine Frage zu diesem Speicherstand …',
+  submitLabel: 'in den Chat',
+  askHere: 'Im Chat fragen',
+  copyForNew: 'Für neuen Chat kopieren',
+  close: 'Schließen',
+  questionHead: (s, p, r) => `Frage zum Speicherstand ${s} im Projekt ${p} (${r}):`,
+  questionMine: q => `Meine Frage: ${q}`,
+  toastAsked: 'Die Frage steht unten im Eingabefeld – mit Enter abschicken.',
+  toastAskStart: 'Unten im Eingabefeld steht der Anfang – Frage ergänzen und mit Enter abschicken.',
+  toastNoFill: d =>
+    `Das Eingabefeld ließ sich nicht füllen${d ? ' (gerade ist ein Dialog offen)' : ''}. „Für neuen Chat kopieren“ geht immer.`,
+  toastCopied: p => `Kopiert. Neuen Chat im Projekt ${p} öffnen und mit Strg+V einfügen.`,
+  commandDescription: 'Git-Stand im Seitenfenster zeigen: drei Ebenen und Gleisplan (optional: anderer Ordner)',
+  commandArg: '[Ordner]',
+  shows: a => `Git-Tracking zeigt jetzt: ${a}`,
+  showsThis: 'Git-Tracking zeigt dieses Projekt.',
+  paneLater: ' (das Fenster erscheint, sobald Platz ist)',
+  quoted: n => `„${n}“`,
+  theMain: 'der Hauptzweig',
+  unnamedBranch: 'ein Zweig ohne Namen',
+  otherBranch: 'ein anderer Zweig',
+  mergeTip: (f, i) => `Zusammenführen (merge): ${f} wurde hier in ${i} übernommen.`,
+  branchTip: names => `Abzweig (branch): hier ${names.length > 1 ? 'beginnen' : 'beginnt'} ${names.join(', ')}.`,
+  pushTip:
+    'Brief geschrieben, aber noch nicht abgeschickt: festgehalten, aber noch nicht hochgeladen (push fehlt). Liegt nur auf diesem PC.',
+  pullTip:
+    'Neuerer Stand bei GitHub: dieser Speicherstand fehlt hier noch – abholen (pull), damit die Ablage auf dem PC aktuell ist.',
+  ago: {
+    now: 'gerade eben',
+    min: n => `vor ${n} Min.`,
+    hours: n => `vor ${n} Std.`,
+    yesterday: 'gestern',
+    days: n => `vor ${n} Tagen`,
+  },
+  refLocal: (n, c, s) => `Zweig ${n}${c ? ' (aktuell)' : ''}${s ? ' (auch in der GitHub-Ablage)' : ''}`,
+  refRemote: n => `GitHub-Ablage: ${n}`,
+  refTag: n => `Versionsschild ${n}`,
+  refDetached: 'aktueller Stand ohne Zweig',
+  refWorktree: n => `Arbeitsverzeichnis ${n}`,
+  stat: (f, p, m) => `${f} ${f === 1 ? 'Datei' : 'Dateien'} geändert (+${p} / −${m} Zeilen)`,
+  binary: 'Binärdatei',
+  moreFiles: n => `${n} weitere nicht gezeigt`,
+  levelTitles: ['GitHub', 'PC', 'Ordner'],
+  mainFolder: 'Hauptordner',
+  formerFolders: 'frühere Ordner',
+  aFormerFolder: 'Ein früherer Ordner',
+  folderGeneric: 'Ordner',
+  diaryLine: 'Eine Zeile = ein Eintrag im Tagebuch dieses PCs, oben neu',
+  readingDiary: 'Lese das Tagebuch …',
+  now: 'Jetzt',
+  nowAll: 'alles festgehalten, hochgeladen und abgeholt',
+  nowWork: 'in Arbeit',
+  nowPush: 'hochladen',
+  nowPull: 'abholen',
+  nowWorkTip: l => `In Arbeit, noch nicht festgehalten – ${l}`,
+  nowPushTip: l => `Festgehalten, noch nicht hochgeladen – ${l}`,
+  nowPullTip: l => `Neuerer Stand bei GitHub, abholen – ${l}`,
+  dirtyFiles: n => n1(n, 'Datei', 'Dateien'),
+  neverPushedBranch: b => `${b} (nie hochgeladen)`,
+  gapEvents: (n, p) => `… ${n} weitere festgehalten${p ? ' und hochgeladen' : ''} (aufklappen)`,
+  olderEvents: '… ältere Ereignisse zeigen',
+  olderThanDiary: 'Älter als das Tagebuch: nur Speicherstände (siehe Gleisplan)',
+  diaryStart: 'Hier beginnt das Tagebuch',
+  arrowsTitle: 'Pfeile (die Zeit läuft nach oben):',
+  arrowYellow: 'gelb, zwischen GitHub und PC: nach links = hochgeladen (push), nach rechts = abgeholt (fetch/pull)',
+  arrowGreen: 'grün, zwischen PC und Ordner: nach links = festgehalten (commit), nach rechts = in den Ordner geholt (checkout)',
+  levelsLegend:
+    '✕ = Zweig gelöscht · grauer Stummel = verworfen (zurückgesetzt, nachträglich geändert, umgeschrieben) · graue gestrichelte Spur = frühere Ordner, z. B. beendete Claude-Sitzungen · Was bei GitHub passiert, sieht dieser PC erst beim Abholen · Klick auf eine Zeile: Details und Fragen',
+  hiddenEvents: n => ` · ${n} Ereignisse auf weiteren Zweigen nicht gezeigt`,
+  ev: {
+    noBranch: 'ohne Zweig',
+    initial: 'Erster Speicherstand',
+    committed: 'Festgehalten',
+    committedPushed: 'Festgehalten + hochgeladen',
+    amended: 'Nachträglich geändert',
+    pushedSuffix: ', hochgeladen',
+    mergedRemote: 'Abgeholtes eingearbeitet',
+    fromGitHub: x => `von GitHub: ${x}`,
+    mergedInto: b => `Zusammengeführt → ${b}`,
+    mergedFrom: x => `aus ${x}`,
+    pulled: 'Abgeholt und eingearbeitet',
+    pushed: b => `Hochgeladen (${b})`,
+    fetched: r => `Von GitHub abgeholt (${r})`,
+    fetchedNoLocal: 'nur bei GitHub, hier kein gleichnamiger Zweig',
+    folderCreated: f => `Ordner angelegt: ${f}`,
+    withBranch: b => `mit Zweig ${b}`,
+    folderTakes: (f, b) => `${f} holt ${b ?? 'Stand ohne Zweig'}`,
+    before: x => `vorher ${x}`,
+    reset: 'Zurückgesetzt',
+    resetDetail: 'neuere Speicherstände verworfen',
+    rebase: 'Umgeschrieben',
+    rebaseDetail: 'Speicherstände neu aufgereiht',
+    newBranch: b => `Neuer Zweig ${b}`,
+    fromSource: x => `von ${x}`,
+    cloned: 'Von GitHub kopiert',
+  },
+}
+
+const en: Texts = {
+  lang: 'en',
+  iconName: { merge: 'Merge', branch: 'Branch', work: 'Work in progress', push: 'Not pushed', pull: 'Not pulled' },
+  reading: 'Reading the Git state …',
+  noGit: 'Not a Git project',
+  noGitFolder: f => `The folder ${f} is not a Git repository (yet).`,
+  gitStartFailed: err => `Git could not be started: ${err}`,
+  gitError: 'Git reports an error.',
+  otherProjectHint: 'Use “/git-tracking <folder>” to show another project.',
+  conflicts: n => `⚠ ${n1(n, 'conflict', 'conflicts')}`,
+  notPushed: n => `${n} not pushed yet`,
+  notPulled: n => `${n} not pulled yet`,
+  filesChanged: n => n1(n, 'file changed', 'files changed'),
+  filesNew: n => n1(n, 'new file', 'new files'),
+  notCommitted: p => `${p} – not committed yet`,
+  stashed: n => `📦 ${n} stashed`,
+  neverPushed: '☁ branch never pushed',
+  localOnly: '☁ local only, no GitHub repository',
+  allClean: '✓ everything committed and pushed',
+  onMain: b => `on main branch ${b}`,
+  onBranch: b => `on branch ${b}`,
+  detached: h => `detached at ${h}`,
+  noCommitYet: 'no commits yet',
+  oneTrack: m => `Single track: everything is on the main branch ${m}, no other branches`,
+  tracks: (m, n, u) =>
+    `Main branch ${m} + ${n1(n, 'branch', 'branches')}` + (u > 0 ? `, ${u} not merged yet` : ', all merged'),
+  worktreesTitle: n => `Additional worktrees (${n}):`,
+  worktreeTarget: (b, h) => (b ? `branch ${b}` : `detached at ${h}`),
+  mainWorktree: ' (main worktree)',
+  andMore: n => `… and ${n} more`,
+  reload: 'Reload',
+  allEvents: 'All events',
+  groupEvents: 'Group similar',
+  allCommits: 'All commits',
+  onlyStops: 'Stops only',
+  onlyThisBranch: 'This branch only',
+  allBranches: 'All branches',
+  moreDiary: 'More history',
+  moreHistory: 'More history',
+  backToProject: 'Back to this project',
+  modeLevels: 'Three levels',
+  modePlan: 'Track plan',
+  symbolsTitle: 'Symbols (hover for an explanation):',
+  iconLegend: {
+    work: 'work in progress: changed in the folder, not committed yet',
+    push: 'letter not sent yet: committed, not pushed yet',
+    pull: 'newer state on GitHub: pull to bring this PC up to date',
+    merge: 'merged: two branches become one',
+    branch: 'branched: a branch splits off',
+  },
+  planLegend:
+    'Rings: dashed = only on this PC, dotted = only on GitHub, solid = here and on GitHub, ◉ = the project is here. ▬ buffer stop = branch not merged yet · dashed stub = branch without commits of its own · “☁ … on GitHub” = how far the GitHub repository is · Newest at the top · Click a row: details and questions',
+  noCommits: 'No commits yet.',
+  workTip: 'Work in progress: changed in the project folder but not in any commit yet. These changes exist only here.',
+  workRow: p => `In the folder: ${p} – not committed yet`,
+  gapRow: n => `… ${n} commits (expand)`,
+  colorTitle: 'Track colours (every branch has its own colour, blue is always the main branch):',
+  laneMain: 'main branch',
+  laneUnnamed: 'unnamed branch',
+  laneIsMain: ' – main branch',
+  laneMerged: ' – merged',
+  laneUnmerged: ' – not merged yet',
+  formerLine: m => `${m} (earlier line)`,
+  atGitHub: (name, newer) => `☁ ${name} on GitHub${newer > 0 ? ` (${newer} newer missing there)` : ''}`,
+  detachedPill: '▶ HEAD (detached)',
+  readingFiles: 'Reading the changed files …',
+  noFileChanges: 'No file changes',
+  questionPlaceholder: 'Your question about this commit …',
+  submitLabel: 'to the chat',
+  askHere: 'Ask in this chat',
+  copyForNew: 'Copy for a new chat',
+  close: 'Close',
+  questionHead: (s, p, r) => `Question about commit ${s} in project ${p} (${r}):`,
+  questionMine: q => `My question: ${q}`,
+  toastAsked: 'The question is in the prompt box below – press Enter to send it.',
+  toastAskStart: 'The start is in the prompt box below – add your question and press Enter.',
+  toastNoFill: d => `The prompt box could not be filled${d ? ' (a dialog is open)' : ''}. “Copy for a new chat” always works.`,
+  toastCopied: p => `Copied. Open a new chat in project ${p} and paste with Ctrl+V.`,
+  commandDescription: 'Show the Git state in a side pane: three levels and track plan (optional: another folder)',
+  commandArg: '[folder]',
+  shows: a => `Git-Tracking now shows: ${a}`,
+  showsThis: 'Git-Tracking shows this project.',
+  paneLater: ' (the pane appears once there is room)',
+  quoted: n => `“${n}”`,
+  theMain: 'the main branch',
+  unnamedBranch: 'an unnamed branch',
+  otherBranch: 'another branch',
+  mergeTip: (f, i) => `Merge: ${f} was merged into ${i} here.`,
+  branchTip: names => `Branch: ${names.join(', ')} ${names.length > 1 ? 'start' : 'starts'} here.`,
+  pushTip: 'Letter written but not sent yet: committed, not pushed yet. Exists only on this PC.',
+  pullTip: 'Newer state on GitHub: this commit is missing here – pull to bring this PC up to date.',
+  ago: {
+    now: 'just now',
+    min: n => `${n} min ago`,
+    hours: n => `${n} h ago`,
+    yesterday: 'yesterday',
+    days: n => `${n} days ago`,
+  },
+  refLocal: (n, c, s) => `branch ${n}${c ? ' (current)' : ''}${s ? ' (also on GitHub)' : ''}`,
+  refRemote: n => `GitHub: ${n}`,
+  refTag: n => `tag ${n}`,
+  refDetached: 'current state without a branch',
+  refWorktree: n => `worktree ${n}`,
+  stat: (f, p, m) => `${f} ${f === 1 ? 'file' : 'files'} changed (+${p} / −${m} lines)`,
+  binary: 'binary',
+  moreFiles: n => `${n} more not shown`,
+  levelTitles: ['GitHub', 'PC', 'Folder'],
+  mainFolder: 'main folder',
+  formerFolders: 'former folders',
+  aFormerFolder: 'A former folder',
+  folderGeneric: 'Folder',
+  diaryLine: 'One row = one entry in this PC’s Git log (reflog), newest at the top',
+  readingDiary: 'Reading the reflog …',
+  now: 'Now',
+  nowAll: 'everything committed, pushed and pulled',
+  nowWork: 'in progress',
+  nowPush: 'push',
+  nowPull: 'pull',
+  nowWorkTip: l => `Work in progress, not committed yet – ${l}`,
+  nowPushTip: l => `Committed, not pushed yet – ${l}`,
+  nowPullTip: l => `Newer state on GitHub, pull – ${l}`,
+  dirtyFiles: n => n1(n, 'file', 'files'),
+  neverPushedBranch: b => `${b} (never pushed)`,
+  gapEvents: (n, p) => `… ${n} more commits${p ? ' and pushes' : ''} (expand)`,
+  olderEvents: '… show older events',
+  olderThanDiary: 'Older than the reflog: commits only (see track plan)',
+  diaryStart: 'The reflog starts here',
+  arrowsTitle: 'Arrows (time runs upwards):',
+  arrowYellow: 'yellow, between GitHub and PC: to the left = pushed, to the right = fetched/pulled',
+  arrowGreen: 'green, between PC and folder: to the left = committed, to the right = checked out into the folder',
+  levelsLegend:
+    '✕ = branch deleted · grey stub = discarded (reset, amended, rebased) · grey dashed lane = former folders, e.g. finished Claude sessions · What happens on GitHub shows up on this PC only after a fetch · Click a row: details and questions',
+  hiddenEvents: n => ` · ${n} events on further branches not shown`,
+  ev: {
+    noBranch: 'no branch',
+    initial: 'First commit',
+    committed: 'Committed',
+    committedPushed: 'Committed + pushed',
+    amended: 'Amended',
+    pushedSuffix: ', pushed',
+    mergedRemote: 'Merged what was fetched',
+    fromGitHub: x => `from GitHub: ${x}`,
+    mergedInto: b => `Merged → ${b}`,
+    mergedFrom: x => `from ${x}`,
+    pulled: 'Pulled',
+    pushed: b => `Pushed (${b})`,
+    fetched: r => `Fetched from GitHub (${r})`,
+    fetchedNoLocal: 'only on GitHub, no local branch of that name',
+    folderCreated: f => `Worktree created: ${f}`,
+    withBranch: b => `with branch ${b}`,
+    folderTakes: (f, b) => `${f} checks out ${b ?? 'a detached state'}`,
+    before: x => `before: ${x}`,
+    reset: 'Reset',
+    resetDetail: 'newer commits discarded',
+    rebase: 'Rebased',
+    rebaseDetail: 'commits rewritten',
+    newBranch: b => `New branch ${b}`,
+    fromSource: x => `from ${x}`,
+    cloned: 'Cloned from GitHub',
+  },
+}
+
+export const TEXTS: Record<Lang, Texts> = { de, en }
+
+/** The texts for a language; anything other than de falls back to English */
+export const texts = (lang: string | null | undefined): Texts => (lang === 'de' ? de : en)

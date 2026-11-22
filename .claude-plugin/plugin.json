@@ -1,0 +1,16 @@
+{
+  "name": "git-tracking",
+  "version": "0.3.0",
+  "description": "Shows the Git state of every project in a side pane: three levels (GitHub, PC, folders) from the reflog and a track plan of branches and commits. In English and German.",
+  "author": { "name": "ShakieVan" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language / Sprache",
+      "description": "auto = system language, de = Deutsch, en = English. Can also be switched in the pane.",
+      "default": "auto",
+      "options": ["auto", "de", "en"]
+    }
+  }
+}
