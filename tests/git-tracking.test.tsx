@@ -530,3 +530,24 @@ test('Ordnerwahl: Befehl je System und Auswertung der Antwort', async () => {
   // Base64 von UTF-16LE: "A" = 41 00
   expect(encodePowerShell('A')).toBe('QQA=')
 })
+
+test('Fenstertitel mit der Fassung aus plugin.json', { options: { language: 'de' } }, async ($, on) => {
+  mock.clock(on, { now: NOW_MS })
+  const titles: string[] = []
+  on('command.register', () => ({ value: { command: 'git-tracking' } }))
+  on('ui.open', (_, e) => {
+    titles.push(e.title ?? "")
+    return { value: { isPlaced: true } }
+  })
+  on('ui.panes', () => ({ value: [] }))
+  on('session.cwd', () => ({ value: 'C:/Projekte/Demo' }))
+  on('session.surfaces', () => ({ value: ['desktop'] }))
+  on('process.run', (_, e) => ({ value: answerGit(e.argv) }))
+  on('fs.read', (_, e) => ({ value: e.path.endsWith('plugin.json') ? '{ "name": "git-tracking", "version": "9.8.7" }' : '' }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.run', () => ({ text: '' }))
+
+  await $.session.start({ cwd: 'C:/Projekte/Demo', surface: 'desktop', isInteractive: true })
+  await $.command.run({ ...CMD, args: '' })
+  expect(titles).toContain('Git-Tracking 9.8.7')
+})

@@ -50,7 +50,19 @@ import { pickedFolder, pickerCommand } from './ordnerwahl'
 
 const PANE = 'git-tracking'
 const TITLE = 'Git-Tracking'
+/** Fenstertitel mit der Fassung aus plugin.json, z. B. „Git-Tracking 0.5.2“; beim Sitzungsstart gelesen */
+let paneTitle = TITLE
 const EVERY_MS = 10_000
+
+/** Liest die Fassung aus der eigenen plugin.json; ohne lesbare Fassung bleibt der Titel ohne Nummer */
+async function readTitle($: EngineInterface): Promise<string> {
+  try {
+    const manifest = JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: unknown }
+    return typeof manifest.version === 'string' && manifest.version ? `${TITLE} ${manifest.version}` : TITLE
+  } catch {
+    return TITLE
+  }
+}
 /** Git ohne Sperren, mit unveränderten Umlauten in Pfaden und ohne Farben */
 const GIT = ['git', '--no-optional-locks', '-c', 'core.quotepath=off', '-c', 'color.ui=never']
 
@@ -651,9 +663,10 @@ export const register: Register = (on, options) => {
     const remembered = (await rememberedFolders($))[folderKey(cwd)]
     if (remembered && (await read($, view)).folder === null) await update($, view, v => ({ ...v, folder: remembered }))
     if (summaryOn) startBrief($)
+    paneTitle = await readTitle($)
     // Ohne angeschlossene Oberfläche (z. B. claude -p) lehnt ui.open ab – dann eben kein Fenster.
     void refresh($)
-      .then(() => $.ui.open({ id: PANE, title: TITLE }))
+      .then(() => $.ui.open({ id: PANE, title: paneTitle }))
       .catch(() => undefined)
     $.clock.every(EVERY_MS, () => {
       void paneShown($).then(shown => (shown ? refresh($) : undefined))
@@ -666,7 +679,7 @@ export const register: Register = (on, options) => {
     const t = texts(await read($, lang))
     const arg = e.args.trim().replace(/^"(.*)"$/, '$1')
     const told = await showFolder($, arg || null, summaryOn)
-    const opened = await $.ui.open({ id: PANE, title: TITLE }).catch(() => null)
+    const opened = await $.ui.open({ id: PANE, title: paneTitle }).catch(() => null)
     const where = (arg ? t.shows(arg) : t.showsThis) + (told ? t.claudeGetsIt : '')
 
     return { text: opened?.isPlaced === false ? `${where}${t.paneLater}` : where }
