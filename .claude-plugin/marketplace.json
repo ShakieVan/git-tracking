@@ -6,7 +6,7 @@
     {
       "name": "git-tracking",
       "source": "./",
-      "description": "Git state of every project in a side pane: three levels (GitHub, PC, folders) and a track plan. English and German."
+      "description": "Git state of every project in a side pane: three levels (GitHub, PC, folders) and a track plan, plus a short Git summary for Claude. English and German."
     }
   ]
 }

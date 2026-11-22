@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import type { TestBody } from 'claude-code/testing'
 
 const PANE = {
   plugin: 'git-tracking',
@@ -69,6 +70,19 @@ function answerGit(argv: readonly string[]) {
     case 'remote':
       return ok('origin\n')
     case 'for-each-ref':
+      // Kurzfassung: alle Zweige mit GitHub-Gegenstück und Zeit, und welche schon in main stecken
+      if (args.some(a => a.includes('committerdate'))) {
+        return ok(
+          'refs/heads/main\torigin/main\t[ahead 2, behind 1]\t1795000500\n' +
+            'refs/heads/feature\torigin/feature\t\t1795000200\n' +
+            'refs/heads/idee\t\t\t1795000000\n' +
+            'refs/remotes/origin/HEAD\t\t\t1795000390\n' +
+            'refs/remotes/origin/main\t\t\t1795000390\n' +
+            'refs/remotes/origin/feature\t\t\t1795000200\n' +
+            'refs/remotes/origin/alt\t\t\t1795000100\n',
+        )
+      }
+      if (args.some(a => a.startsWith('--merged='))) return ok('refs/heads/main\nrefs/remotes/origin/main\nrefs/remotes/origin/alt\n')
       if (args.some(a => a.includes('upstream:track'))) {
         return ok('main\tc3\torigin/main\t[ahead 2, behind 1]\nfeature\tf1\torigin/feature\t\n')
       }
@@ -76,6 +90,7 @@ function answerGit(argv: readonly string[]) {
         ? ok('feature\n')
         : ok('refs/heads/main\nrefs/heads/feature\nrefs/remotes/origin/main\nrefs/remotes/origin/feature\n')
     case 'rev-list':
+      if (args.includes('--count')) return ok('2\n')
       // --branches --not --remotes: nur hier; --remotes --not --branches: nur bei GitHub
       return args.indexOf('--branches') < args.indexOf('--remotes') ? ok('c3\n') : ok('')
     case 'show':
@@ -279,4 +294,92 @@ test('English: the three levels speak English, and DE switches to German', { opt
   expect(texts).toContain('steht auf dem Hauptzweig main')
   expect(texts).toContain('Gleisplan')
   await ui.unmount()
+})
+
+// ---------------------------------------------------------------- Kurzfassung für Claude
+
+const NOW_MS = 1795000600 * 1000
+
+function briefHooks(on: Parameters<TestBody>[1], answer: (argv: readonly string[]) => unknown) {
+  mock.clock(on, { now: NOW_MS })
+  on('command.register', () => ({ value: { command: 'git-tracking' } }))
+  on('ui.open', () => ({ value: { isPlaced: false, reason: 'test' } }))
+  on('ui.panes', () => ({ value: [] }))
+  on('session.cwd', () => ({ value: 'C:/Projekte/Demo' }))
+  on('session.surfaces', () => ({ value: ['desktop'] }))
+  on('process.run', (_, e) => ({ value: answer(e.argv) as ReturnType<typeof answerGit> }))
+  on('fs.stat', () => ({ value: { kind: 'file', size: 10, mtimeMs: 1795000550 * 1000, isLink: false } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('prompt.context', (_, e) => ({ blocks: e.blocks }))
+}
+
+test('Kurzfassung: Claude bekommt beim Start den Git-Stand als Kontext-Block', { options: { language: 'de' } }, async ($, on) => {
+  briefHooks(on, answerGit)
+  await $.session.start({ cwd: 'C:/Projekte/Demo', surface: 'desktop', isInteractive: true })
+
+  const res = await $.prompt.context({ blocks: [{ name: 'currentDate', text: 'heute' }] })
+  expect(res.blocks[0]?.name).toBe('currentDate')
+  const block = res.blocks.find(b => b.name === 'gitTracking')
+  expect(block).toBeDefined()
+  const text = block!.text
+  expect(text).toContain('Dieser Ordner C:/Projekte/Demo ist der Hauptordner der Ablage und steht auf dem Hauptzweig main.')
+  expect(text).toContain('In diesem Ordner: geändert, noch nicht festgehalten (uncommitted): 1 Datei geändert, 1 neue Datei; zuletzt bearbeitet gerade eben')
+  expect(text).toContain('Letzte Git-Aktion in diesem Ordner: festgehalten (commit) „Feature work“')
+  expect(text).toContain('Noch nicht hochgeladen (push): 2 Speicherstände.')
+  expect(text).toContain('Noch nicht abgeholt (pull): 1 Speicherstand auf origin/main')
+  expect(text).toContain(
+    'Entwicklungszweige (branches) neben main: 2. Noch nicht zusammengeführt: feature (letzter Speicherstand vor 6 Min.), idee (2 Speicherstände nur auf diesem PC, letzter Speicherstand vor 10 Min.).',
+  )
+  expect(text).toContain('Bei GitHub (origin) außer main: 2 Zweige; schon in main zusammengeführt: alt; 1 weitere wie bei den Entwicklungszweigen oben.')
+  expect(text).toContain('Weitere Ordner dieser Ablage (worktrees): 1')
+  expect(text).toContain('· .claude/worktrees/x – steht ohne Zweig auf Speicherstand f1 (detached HEAD): geändert, noch nicht festgehalten (uncommitted): 1 Datei geändert, 1 neue Datei; zuletzt bearbeitet gerade eben')
+  expect(text).not.toContain('umgeschaltet')
+})
+
+test('Summary: the same in English', { options: { language: 'en' } }, async ($, on) => {
+  briefHooks(on, answerGit)
+  await $.session.start({ cwd: 'C:/Projekte/Demo', surface: 'desktop', isInteractive: true })
+  const text = (await $.prompt.context({ blocks: [] })).blocks.find(b => b.name === 'gitTracking')?.text ?? ''
+  expect(text).toContain('This folder C:/Projekte/Demo is the repository\'s main folder and is on the main branch main.')
+  expect(text).toContain('Branches besides main: 2. Not merged yet: feature (last commit 6 min ago), idee (2 commits only on this computer, last commit 10 min ago).')
+  expect(text).toContain('Last Git action in this folder: commit “Feature work”')
+})
+
+const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false })
+function answerClean(argv: readonly string[]) {
+  const args = argv.slice(argv.indexOf('color.ui=never') + 1)
+  switch (args[0]) {
+    case 'rev-parse':
+      return ok('C:/Projekte/Demo\n')
+    case 'status':
+      return ok('# branch.oid c3\n# branch.head main\n# branch.upstream origin/main\n# branch.ab +0 -0\n')
+    case 'worktree':
+      return ok('worktree C:/Projekte/Demo\nHEAD c3\nbranch refs/heads/main\n')
+    case 'remote':
+      return ok('origin\n')
+    case 'for-each-ref':
+      return args.some(a => a.startsWith('--merged='))
+        ? ok('refs/heads/main\nrefs/remotes/origin/main\n')
+        : ok('refs/heads/main\torigin/main\t\t1795000500\nrefs/remotes/origin/main\t\t\t1795000500\n')
+    case 'rev-list':
+      return ok('0\n')
+    case 'log':
+      return ok(day('HEAD@{1795000500}', 'c3', 'commit: Main work'))
+    default:
+      return ok('')
+  }
+}
+
+test('Kurzfassung: nichts Auffälliges – kein Block', { options: { language: 'de' } }, async ($, on) => {
+  briefHooks(on, answerClean)
+  await $.session.start({ cwd: 'C:/Projekte/Demo', surface: 'desktop', isInteractive: true })
+  const res = await $.prompt.context({ blocks: [] })
+  expect(res.blocks.find(b => b.name === 'gitTracking')).toBeUndefined()
+})
+
+test('Kurzfassung: abgeschaltet – kein Block', { options: { language: 'de', claudeSummary: 'off' } }, async ($, on) => {
+  briefHooks(on, answerGit)
+  await $.session.start({ cwd: 'C:/Projekte/Demo', surface: 'desktop', isInteractive: true })
+  const res = await $.prompt.context({ blocks: [] })
+  expect(res.blocks.find(b => b.name === 'gitTracking')).toBeUndefined()
 })

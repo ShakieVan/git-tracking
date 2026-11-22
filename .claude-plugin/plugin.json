@@ -1,11 +1,19 @@
 {
   "name": "git-tracking",
-  "version": "0.3.0",
-  "description": "Shows the Git state of every project in a side pane: three levels (GitHub, PC, folders) from the reflog and a track plan of branches and commits. In English and German.",
-  "author": { "name": "ShakieVan" },
+  "version": "0.4.0",
+  "description": "Shows the Git state of every project in a side pane: three levels (GitHub, PC, folders) from the reflog and a track plan of branches and commits. Gives Claude a short Git summary when a conversation starts. In English and German.",
+  "author": {
+    "name": "ShakieVan"
+  },
   "homepage": "https://github.com/ShakieVan/git-tracking",
   "repository": "https://github.com/ShakieVan/git-tracking",
-  "keywords": ["git", "reflog", "branches", "visualization", "side pane"],
+  "keywords": [
+    "git",
+    "reflog",
+    "branches",
+    "visualization",
+    "side pane"
+  ],
   "types": "./types/index.d.ts",
   "userConfig": {
     "language": {
@@ -13,7 +21,21 @@
       "title": "Language / Sprache",
       "description": "auto = system language, de = Deutsch, en = English. Can also be switched in the pane.",
       "default": "auto",
-      "options": ["auto", "de", "en"]
+      "options": [
+        "auto",
+        "de",
+        "en"
+      ]
+    },
+    "claudeSummary": {
+      "type": "string",
+      "title": "Summary for Claude / Kurzfassung für Claude",
+      "description": "on = when a conversation starts, Claude gets a few lines about branches, worktrees and uncommitted or unpushed work (only when there is something to report). off = nothing is added.",
+      "default": "on",
+      "options": [
+        "on",
+        "off"
+      ]
     }
   }
 }

@@ -19,6 +19,17 @@ A Claude Code plugin that shows the Git state of the current project in a side p
 
 Click any row to see the changed files and ask Claude about that commit – in the current chat, or copied for a new one.
 
+## Summary for Claude
+
+When a conversation starts (and again after `/clear` or a compaction), Git-Tracking gives Claude a few lines of text about the project – what Claude Code’s own Git status leaves out:
+
+- other branches, whether they are merged into the main branch, and which exist only on this PC or only on GitHub
+- other worktrees of the repository and whether they hold uncommitted work
+- when uncommitted files were last edited (a hint whether another session may still be working on them)
+- what is not pushed or not pulled yet, stashes, the last Git action in the folder, and how often the main folder switched branches lately
+
+Nothing is added when there is nothing to report. The lines become part of what Claude Code sends to the model with the first message. Turn it off in the plugin settings: `claudeSummary`: `off`.
+
 ## Language
 
 English and German. The pane follows the system language; **DE | EN** at the top of the pane switches it (remembered). It can also be set in the plugin settings (`language`: `auto`, `de`, `en`).
@@ -73,6 +84,17 @@ Eine Erweiterung für Claude Code. Sie zeigt in jedem Projekt in einem Seitenfen
 **Gleisplan**: Zweige und Speicherstände als S-Bahn-Plan – Hauptzweig blau links, jeder Entwicklungszweig in seiner Farbe, Prellbock = noch nicht zusammengeführt, Ringe zeigen, ob ein Speicherstand nur hier, nur bei GitHub oder an beiden Orten liegt. Fährt die Maus über ein Zeichen, erscheint die Erklärung.
 
 Ein Klick auf eine Zeile zeigt die geänderten Dateien; dort lässt sich eine Frage an Claude stellen – im aktuellen Chat oder kopiert für einen neuen.
+
+### Kurzfassung für Claude
+
+Beim Start einer Unterhaltung (und wieder nach `/clear` oder dem Zusammenfassen) bekommt Claude ein paar Zeilen Text über das Projekt – das, was der eingebaute Git-Stand von Claude Code nicht sagt:
+
+- andere Entwicklungszweige, ob sie schon im Hauptzweig zusammengeführt sind und welche nur auf diesem PC oder nur bei GitHub liegen
+- andere Arbeitsverzeichnisse der Ablage und ob dort etwas geändert, aber noch nicht festgehalten ist
+- wann offene Dateien zuletzt bearbeitet wurden (ein Hinweis, ob eine andere Sitzung noch daran arbeitet)
+- was noch nicht hochgeladen oder abgeholt ist, Beiseitegelegtes (stash), die letzte Git-Aktion im Ordner und wie oft der Hauptordner zuletzt zwischen Zweigen umgeschaltet wurde
+
+Ist nichts auffällig, kommt nichts dazu. Die Zeilen gehen mit der ersten Nachricht an das Modell. Abschalten in den Plugin-Einstellungen: `claudeSummary`: `off`.
 
 ### Sprache
 

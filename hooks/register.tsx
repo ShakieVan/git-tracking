@@ -34,6 +34,8 @@ import { COL_ORD, COL_PC, diaryEvents, ebenenModel, ebenenSlices, eventLines, pa
 import type { DiaryEvent } from './ebenen'
 import { texts } from './i18n'
 import type { Lang, Texts } from './i18n'
+import { briefText, readBrief } from './kurzfassung'
+import type { BriefNewest, BriefRun } from './kurzfassung'
 
 const PANE = 'git-tracking'
 const TITLE = 'Git-Tracking'
@@ -327,6 +329,56 @@ async function setLang($: EngineInterface, l: Lang): Promise<void> {
   await update($, lang, () => l)
 }
 
+// ---------------------------------------------------------------- Kurzfassung für Claude
+
+/** Name des Kontext-Blocks, unter dem Claude die Kurzfassung liest */
+const BRIEF_BLOCK = 'gitTracking'
+/** Höchstens so viele offene Dateien je Ordner nach ihrer Änderungszeit fragen */
+const BRIEF_STATS = 60
+
+/** So lange gilt eine beim Sitzungsstart vorgelesene Kurzfassung noch als frisch */
+const BRIEF_FRESH_MS = 120_000
+/** So lange wartet Claudes erste Nachricht höchstens auf die vorgelesene Kurzfassung */
+const BRIEF_WAIT_MS = 8000
+
+/** Beim Sitzungsstart vorgelesen, damit die erste Nachricht nicht auf Git warten muss */
+let warmBrief: { cwd: string; at: number; brief: Promise<string | null> } | null = null
+
+function startBrief($: EngineInterface): void {
+  warmBrief = null
+  void (async () => {
+    const cwd = await $.session.cwd()
+    const at = await $.clock.now()
+    warmBrief = { cwd, at, brief: claudeBrief($, cwd, at).catch(() => null) }
+  })().catch(() => undefined)
+}
+
+/** Die Kurzfassung für den Ordner der Sitzung: vorgelesen, wenn frisch, sonst jetzt gelesen */
+async function currentBrief($: EngineInterface): Promise<string | null> {
+  const cwd = await $.session.cwd()
+  const now = await $.clock.now()
+  const w = warmBrief
+  if (w && samePath(w.cwd, cwd) && now - w.at < BRIEF_FRESH_MS) {
+    return Promise.race([w.brief, $.clock.sleep(BRIEF_WAIT_MS).then(() => null)])
+  }
+  return claudeBrief($, cwd, now)
+}
+
+/** Die Kurzfassung des Git-Stands in einem Ordner; null = kein Git oder nichts auffällig */
+async function claudeBrief($: EngineInterface, cwd: string, now: number): Promise<string | null> {
+  const git: BriefRun = (args, dir) => $.process.run([...GIT, ...args], { cwd: dir, timeoutMs: 8000 })
+  const newest: BriefNewest = async (folder, paths) => {
+    const base = folder.replace(/[\\/]+$/, '')
+    const stats = await Promise.all(
+      paths.slice(0, BRIEF_STATS).map(p => $.fs.stat(`${base}/${p.replace(/\/+$/, '')}`).catch(() => null)),
+    )
+    const times = stats.map(s => s?.mtimeMs ?? 0).filter(ms => ms > 0)
+    return times.length > 0 ? Math.max(...times) : null
+  }
+  const data = await readBrief(git, newest, cwd, now)
+  return data ? briefText(data, now, texts(await read($, lang))) : null
+}
+
 // ---------------------------------------------------------------- Anklicken und Fragen
 
 type Pill = { label: string; bg?: string; fg?: string; dim?: boolean; mono?: boolean }
@@ -441,6 +493,7 @@ export const register: Register = (on, options) => {
       description: t.commandDescription,
       argumentHint: t.commandArg,
     })
+    if (options.claudeSummary !== 'off') startBrief($)
     // Ohne angeschlossene Oberfläche (z. B. claude -p) lehnt ui.open ab – dann eben kein Fenster.
     void refresh($)
       .then(() => $.ui.open({ id: PANE, title: TITLE }))
@@ -462,6 +515,16 @@ export const register: Register = (on, options) => {
 
     return { text: opened?.isPlaced === false ? `${where}${t.paneLater}` : where }
   })
+
+  // Beim Start jeder Unterhaltung (und nach /clear oder dem Zusammenfassen) bekommt Claude
+  // die Kurzfassung als Kontext-Block mit – nur wenn etwas auffällig ist.
+  on('prompt.context', async ($, e, next) => {
+    const res = await next(e)
+    if (options.claudeSummary === 'off') return res
+    const brief = await currentBrief($).catch(() => null)
+    if (!brief) return res
+    return { ...res, blocks: [...res.blocks.filter(b => b.name !== BRIEF_BLOCK), { name: BRIEF_BLOCK, text: brief }] }
+  }).catch(($, e, next) => next(e))
 
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)

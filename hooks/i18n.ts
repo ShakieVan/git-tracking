@@ -164,7 +164,52 @@ export type Texts = {
     fromSource: (x: string) => string
     cloned: string
   }
+  /** Kurzfassung für Claude (kurzfassung.ts) */
+  brief: BriefTexts
 }
+
+/** Was eine Git-Aktion im Tagebuch war (aus classify in ebenen.ts) */
+export type BriefAction = { kind: string; subject: string; from?: string; to?: string }
+
+export type BriefTexts = {
+  head: (date: string) => string
+  folderMain: (path: string, where: string) => string
+  folderLinked: (path: string, mainPath: string, where: string) => string
+  onMain: (b: string) => string
+  onBranch: (b: string) => string
+  detached: (h: string) => string
+  hereWork: (work: string) => string
+  changed: (n: number) => string
+  untracked: (n: number) => string
+  conflicts: (n: number) => string
+  clean: string
+  dirty: (parts: string, when: string | null) => string
+  last: (action: string, when: string) => string
+  action: (a: BriefAction) => string
+  noRemote: string
+  neverPushed: (b: string) => string
+  unpushed: (n: number) => string
+  unpulled: (n: number, upstream: string) => string
+  synced: string
+  openBranch: (name: string, details: string[]) => string
+  inFolder: (path: string) => string
+  onlyHere: (n: number | null) => string
+  pushedElsewhere: string
+  notPushed: (n: number) => string
+  lastCommit: (ago: string) => string
+  branches: (main: string, n: number, open: string | null, done: string | null, allMerged: boolean) => string
+  remoteBranches: (remote: string, main: string, n: number, done: string | null, onlyThere: string | null, rest: number) => string
+  stashes: (n: number) => string
+  othersTitle: (n: number) => string
+  mainMark: string
+  switches: (n: number, days: number, noOthers: boolean) => string
+  noOthers: string
+  on: (date: string) => string
+  andMore: (n: number) => string
+}
+
+/** Betreff eines Speicherstands, für die Kurzfassung gekürzt */
+const subj = (s: string) => (s.length > 70 ? `${s.slice(0, 69)}…` : s)
 
 const de: Texts = {
   lang: 'de',
@@ -331,6 +376,79 @@ const de: Texts = {
     fromSource: x => `von ${x}`,
     cloned: 'Von GitHub kopiert',
   },
+  brief: {
+    head: d =>
+      `Git-Tracking (Erweiterung des Nutzers) – Git-Stand dieses Projekts beim Start der Unterhaltung (${d}), nur gelesen; Git-Begriffe in Klammern:`,
+    folderMain: (p, w) => `- Dieser Ordner ${p} ist der Hauptordner der Ablage und ${w}.`,
+    folderLinked: (p, m, w) => `- Dieser Ordner ${p} ist ein zusätzliches Arbeitsverzeichnis (worktree) der Ablage ${m} und ${w}.`,
+    onMain: b => `steht auf dem Hauptzweig ${b}`,
+    onBranch: b => `steht auf dem Entwicklungszweig (branch) ${b}`,
+    detached: h => `steht ohne Zweig auf Speicherstand ${h} (detached HEAD)`,
+    hereWork: w => `- In diesem Ordner: ${w}.`,
+    changed: n => n1(n, 'Datei geändert', 'Dateien geändert'),
+    untracked: n => n1(n, 'neue Datei', 'neue Dateien'),
+    conflicts: n => `${n1(n, 'Datei', 'Dateien')} mit Konflikt (conflict)`,
+    clean: 'alles festgehalten (clean)',
+    dirty: (p, w) => `geändert, noch nicht festgehalten (uncommitted): ${p}${w ? `; zuletzt bearbeitet ${w}` : ''}`,
+    last: (a, w) => `- Letzte Git-Aktion in diesem Ordner: ${a}, ${w}.`,
+    action: a => {
+      switch (a.kind) {
+        case 'commit':
+          return `festgehalten (commit) „${subj(a.subject)}“`
+        case 'amend':
+          return 'Speicherstand nachgebessert (commit --amend)'
+        case 'merge':
+          return `zusammengeführt (merge) aus ${a.from ?? '?'}`
+        case 'pull':
+          return 'von GitHub abgeholt (pull)'
+        case 'checkout':
+          return `umgeschaltet (checkout) von ${a.from ?? '?'} auf ${a.to ?? '?'}`
+        case 'reset':
+          return 'zurückgesetzt (reset)'
+        case 'rebase':
+          return 'Speicherstände neu aufgesetzt (rebase)'
+        case 'create':
+          return 'Zweig angelegt'
+        case 'clone':
+          return 'von GitHub geholt (clone)'
+        case 'push':
+          return 'hochgeladen (push)'
+        case 'fetch':
+          return 'abgeholt (fetch)'
+        default:
+          return `„${subj(a.subject)}“`
+      }
+    },
+    noRemote: '- Keine GitHub-Ablage (remote): alles liegt nur auf diesem PC.',
+    neverPushed: b => `- Der Zweig ${b} wurde noch nie hochgeladen (kein upstream).`,
+    unpushed: n => `- Noch nicht hochgeladen (push): ${n1(n, 'Speicherstand', 'Speicherstände')}.`,
+    unpulled: (n, u) => `- Noch nicht abgeholt (pull): ${n1(n, 'Speicherstand', 'Speicherstände')} auf ${u}, laut letztem Abholen (fetch).`,
+    synced: '- Alles hochgeladen, nichts abzuholen (laut letztem Abholen/fetch).',
+    openBranch: (name, d) => (d.length > 0 ? `${name} (${d.join(', ')})` : name),
+    inFolder: p => `steht in ${p}`,
+    onlyHere: n => (n === null ? 'nur auf diesem PC' : `${n1(n, 'Speicherstand', 'Speicherstände')} nur auf diesem PC`),
+    pushedElsewhere: 'hochgeladen, aber ohne eigenen GitHub-Zweig/upstream',
+    notPushed: n => `${n} nicht hochgeladen`,
+    lastCommit: a => `letzter Speicherstand ${a}`,
+    branches: (m, n, open, done, all) =>
+      all
+        ? `- Entwicklungszweige (branches) neben ${m}: ${n}, alle schon in ${m} zusammengeführt (merged): ${done}.`
+        : `- Entwicklungszweige (branches) neben ${m}: ${n}. Noch nicht zusammengeführt: ${open}${done ? `. Schon in ${m} zusammengeführt (merged): ${done}` : ''}.`,
+    remoteBranches: (r, m, n, done, only, rest) =>
+      `- Bei GitHub (${r}) außer ${m}: ${n1(n, 'Zweig', 'Zweige')}` +
+      (done ? `; schon in ${m} zusammengeführt: ${done}` : '') +
+      (only ? `; nur dort und nicht zusammengeführt: ${only}` : '') +
+      (rest > 0 ? `; ${rest} weitere wie bei den Entwicklungszweigen oben` : '') +
+      '.',
+    stashes: n => `- Beiseitegelegt (stash): ${n1(n, 'Eintrag', 'Einträge')}.`,
+    othersTitle: n => `- Weitere Ordner dieser Ablage (worktrees): ${n}`,
+    mainMark: ' (Hauptordner)',
+    switches: (n, days, none) =>
+      `- Der Hauptordner wurde in den letzten ${days} Tagen ${n}× zwischen Zweigen umgeschaltet (checkout)${none ? '; zusätzliche Arbeitsverzeichnisse (worktrees) gibt es keine' : ''}.`,
+    noOthers: '- Keine zusätzlichen Arbeitsverzeichnisse (worktrees).',
+    on: d => `am ${d}`,
+    andMore: n => `und ${n} weitere`,
+  },
 }
 
 const en: Texts = {
@@ -492,6 +610,78 @@ const en: Texts = {
     newBranch: b => `New branch ${b}`,
     fromSource: x => `from ${x}`,
     cloned: 'Cloned from GitHub',
+  },
+  brief: {
+    head: d => `Git-Tracking (the user's mod) – Git state of this project when the conversation started (${d}), read-only:`,
+    folderMain: (p, w) => `- This folder ${p} is the repository's main folder and ${w}.`,
+    folderLinked: (p, m, w) => `- This folder ${p} is a linked worktree of the repository ${m} and ${w}.`,
+    onMain: b => `is on the main branch ${b}`,
+    onBranch: b => `is on branch ${b}`,
+    detached: h => `is on commit ${h} without a branch (detached HEAD)`,
+    hereWork: w => `- In this folder: ${w}.`,
+    changed: n => `${n} changed ${n === 1 ? 'file' : 'files'}`,
+    untracked: n => `${n} new ${n === 1 ? 'file' : 'files'}`,
+    conflicts: n => `${n} ${n === 1 ? 'file' : 'files'} with conflicts`,
+    clean: 'nothing uncommitted (clean)',
+    dirty: (p, w) => `uncommitted changes: ${p}${w ? `; last edited ${w}` : ''}`,
+    last: (a, w) => `- Last Git action in this folder: ${a}, ${w}.`,
+    action: a => {
+      switch (a.kind) {
+        case 'commit':
+          return `commit “${subj(a.subject)}”`
+        case 'amend':
+          return 'commit --amend'
+        case 'merge':
+          return `merge from ${a.from ?? '?'}`
+        case 'pull':
+          return 'pull from GitHub'
+        case 'checkout':
+          return `checkout from ${a.from ?? '?'} to ${a.to ?? '?'}`
+        case 'reset':
+          return 'reset'
+        case 'rebase':
+          return 'rebase'
+        case 'create':
+          return 'branch created'
+        case 'clone':
+          return 'clone from GitHub'
+        case 'push':
+          return 'push'
+        case 'fetch':
+          return 'fetch'
+        default:
+          return `“${subj(a.subject)}”`
+      }
+    },
+    noRemote: '- No remote: everything exists only on this computer.',
+    neverPushed: b => `- Branch ${b} has never been pushed (no upstream).`,
+    unpushed: n => `- Not pushed yet: ${n} ${n === 1 ? 'commit' : 'commits'}.`,
+    unpulled: (n, u) => `- Not pulled yet: ${n} ${n === 1 ? 'commit' : 'commits'} on ${u}, as of the last fetch.`,
+    synced: '- Everything pushed, nothing to pull (as of the last fetch).',
+    openBranch: (name, d) => (d.length > 0 ? `${name} (${d.join(', ')})` : name),
+    inFolder: p => `checked out in ${p}`,
+    onlyHere: n => (n === null ? 'only on this computer' : `${n} ${n === 1 ? 'commit' : 'commits'} only on this computer`),
+    pushedElsewhere: 'pushed, but without an upstream branch',
+    notPushed: n => `${n} not pushed`,
+    lastCommit: a => `last commit ${a}`,
+    branches: (m, n, open, done, all) =>
+      all
+        ? `- Branches besides ${m}: ${n}, all already merged into ${m}: ${done}.`
+        : `- Branches besides ${m}: ${n}. Not merged yet: ${open}${done ? `. Already merged into ${m}: ${done}` : ''}.`,
+    remoteBranches: (r, m, n, done, only, rest) =>
+      `- On GitHub (${r}) besides ${m}: ${n} ${n === 1 ? 'branch' : 'branches'}` +
+      (done ? `; already merged into ${m}: ${done}` : '') +
+      (only ? `; only there and not merged: ${only}` : '') +
+      (rest > 0 ? `; ${rest} more as in the branches above` : '') +
+      '.',
+    stashes: n => `- Stashed: ${n} ${n === 1 ? 'entry' : 'entries'}.`,
+    othersTitle: n => `- Other folders of this repository (worktrees): ${n}`,
+    mainMark: ' (main folder)',
+    switches: (n, days, none) =>
+      `- The main folder switched branches ${n}× in the last ${days} days (checkout)${none ? '; there are no linked worktrees' : ''}.`,
+    noOthers: '- No linked worktrees.',
+    on: d => `on ${d}`,
+    andMore: n => `and ${n} more`,
   },
 }
 
