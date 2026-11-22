@@ -13,7 +13,7 @@ A Claude Code plugin that shows the Git state of the current project in a side p
 - **Folders** (green): every worktree – the main folder and additional ones, e.g. from Claude sessions; a grey dashed lane collects former folders that no longer exist
 - Arrows: yellow to the left = pushed, yellow to the right = fetched/pulled; green to the left = committed, green to the right = checked out into the folder
 - A lane reaches “Now” only while something is open on it: not merged into the main branch yet, not pushed or not pulled, or checked out in a folder. Otherwise it fades out after its last event, or bends into the branch it was merged into
-- Merges on GitHub (pull request on the website) or on another PC get their own blue row (“Merged on GitHub → main”), read from the merge commits once they have been fetched
+- Merges on GitHub (pull request on the website) or on another PC get their own blue row (“Merged on GitHub → main” or “Merged elsewhere → main”), read from the merge commits once they have been fetched. A merge on the website is recognised by its committer (GitHub), even if its message was changed
 - ✕ = branch deleted · grey stub = discarded (reset, amended, rebased)
 - The top row (“Now”) marks what is still open: a wrench (work in progress, not committed), a closed envelope (committed, not pushed) and two circular arrows (newer state on GitHub, pull)
 
@@ -91,7 +91,7 @@ Eine Erweiterung für Claude Code. Sie zeigt in jedem Projekt in einem Seitenfen
 - **Ordner** (grün): jedes Arbeitsverzeichnis (Hauptordner und zusätzliche, z. B. von Claude-Sitzungen); graue gestrichelte Spur = frühere Ordner, die es nicht mehr gibt
 - Pfeile: gelb nach links = hochgeladen (push), gelb nach rechts = abgeholt (fetch/pull); grün nach links = festgehalten (commit), grün nach rechts = in den Ordner geholt (checkout)
 - Eine Spur reicht nur bis „Jetzt“, solange auf ihr etwas offen ist: noch nicht in den Hauptzweig zusammengeführt, noch nicht hochgeladen oder abgeholt, oder ein Ordner arbeitet darauf. Sonst läuft sie nach ihrem letzten Ereignis aus oder biegt in den Zweig ein, in den sie zusammengeführt wurde
-- Zusammenführen bei GitHub (Änderungsvorschlag auf der Webseite) oder auf einem anderen Rechner bekommt eine eigene blaue Zeile („Bei GitHub zusammengeführt → main“), erkannt an den Speicherständen, sobald sie abgeholt sind
+- Zusammenführen bei GitHub (Änderungsvorschlag auf der Webseite) oder auf einem anderen Rechner bekommt eine eigene blaue Zeile („Bei GitHub zusammengeführt → main“ bzw. „Woanders zusammengeführt → main“), erkannt an den Speicherständen, sobald sie abgeholt sind. Zusammenführen auf der Webseite erkennt die Ansicht am Ersteller (GitHub), auch wenn der Text dabei geändert wurde
 - ✕ = Zweig gelöscht · grauer Stummel = verworfen (zurückgesetzt, nachträglich geändert, umgeschrieben)
 - Oberste Zeile („Jetzt“): Schraubenschlüssel = in Arbeit, noch nicht festgehalten · geschlossener Briefumschlag = festgehalten, noch nicht hochgeladen · zwei Halbkreis-Pfeile = neuerer Stand bei GitHub, abholen
 

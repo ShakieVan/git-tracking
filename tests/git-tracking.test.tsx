@@ -67,7 +67,7 @@ function answerGit(argv: readonly string[]) {
       return ok(STATUS)
     case 'log':
       // Zusammenführungen auf origin/main: c3 entstand hier (steht im Tagebuch), also keine GitHub-Zeile
-      if (args.includes('--merges')) return ok(['c3', 'c2 f1', '1795000500', 'Merge feature'].join(US) + '\n')
+      if (args.includes('--merges')) return ok(['c3', 'c2 f1', '1795000500', 't@t', 'Merge feature'].join(US) + '\n')
       if (args.includes('-g')) return ok(args.some(a => a.startsWith('refs/heads/')) ? DIARY : DIARY_X)
       if (args.includes('--max-parents=0')) return ok('1795000050\n')
       return args.includes('--graph') ? ok('* c3 (HEAD -> main) Merge feature\n') : ok(LOG)
@@ -590,11 +590,11 @@ test('Drei Ebenen: bei GitHub zusammengeführt wird erkannt, erledigte Zweige la
     oldestCommit: 100,
     mainRemote: 'origin/main',
     remoteMerges: [
-      { hash: 'm1', parents: ['x9', 'f1'], time: 400, subject: 'Merge pull request #3 from ShakieVan/feat' },
+      { hash: 'm1', parents: ['x9', 'f1'], time: 400, committer: 'noreply@github.com', subject: 'Merge pull request #3 from ShakieVan/feat' },
       // von hier hochgeladen: entstand auf diesem PC
-      { hash: 'x9', parents: ['c1', 'f0'], time: 330, subject: "Merge branch 'alt'" },
+      { hash: 'x9', parents: ['c1', 'f0'], time: 330, committer: 't@t', subject: "Merge branch 'alt'" },
       // vor dem Tagebuch
-      { hash: 'old', parents: ['a', 'b'], time: 10, subject: "Merge branch 'uralt'" },
+      { hash: 'old', parents: ['a', 'b'], time: 10, committer: 't@t', subject: "Merge branch 'uralt'" },
     ],
     unmergedRemote: [],
   }
@@ -643,10 +643,25 @@ test('Drei Ebenen: bei GitHub zusammengeführt wird erkannt, erledigte Zweige la
   const gone = diaryEvents({ ...diary, remoteBranches: ['origin/main'] }, ['main', 'feat']).find(e => e.kind === 'remotemerge')!
   expect(mergedLane(gone)).toBeNull()
   expect(eventLines(gone, () => '', 'main', t).detail).toBe('aus feat · Änderungsvorschlag #3')
-  // Ohne Änderungsvorschlag: woanders zusammengeführt
-  const other = diaryEvents({ ...diary, remoteMerges: [{ hash: 'm1', parents: ['x9', 'f1'], time: 400, subject: "Merge branch 'feat'" }] }, ['main', 'feat'])
-  expect(eventLines(other.find(e => e.kind === 'remotemerge')!, () => '', 'main', texts('en')).title).toBe('Merged elsewhere → main')
-  expect(parseMerges('m1\x1fx9 f1\x1f400\x1fMerge pull request #3 from a/feat\n')).toEqual([
-    { hash: 'm1', parents: ['x9', 'f1'], time: 400, subject: 'Merge pull request #3 from a/feat' },
+  // Geänderter Text beim Zusammenführen auf der Webseite: GitHub als Ersteller verrät es trotzdem
+  const renamed = diaryEvents(
+    {
+      ...diary,
+      remoteMerges: [{ hash: 'm1', parents: ['x9', 'f1'], time: 400, committer: 'noreply@github.com', subject: 'Merge: Projektordner aufräumen' }],
+    },
+    ['main', 'feat'],
+  ).find(e => e.kind === 'remotemerge')!
+  expect(eventLines(renamed, () => '', 'main', t)).toEqual({ title: 'Bei GitHub zusammengeführt → main', detail: 'aus feat' })
+  // Auf einem anderen Rechner zusammengeführt
+  const other = diaryEvents(
+    { ...diary, remoteMerges: [{ hash: 'm1', parents: ['x9', 'f1'], time: 400, committer: 't@t', subject: "Merge branch 'feat'" }] },
+    ['main', 'feat'],
+  ).find(e => e.kind === 'remotemerge')!
+  expect(eventLines(other, () => '', 'main', texts('en'))).toEqual({
+    title: 'Merged elsewhere → main',
+    detail: 'from feat · on another computer (e.g. Claude in the cloud)',
+  })
+  expect(parseMerges('m1\x1fx9 f1\x1f400\x1fnoreply@github.com\x1fMerge pull request #3 from a/feat\n')).toEqual([
+    { hash: 'm1', parents: ['x9', 'f1'], time: 400, committer: 'noreply@github.com', subject: 'Merge pull request #3 from a/feat' },
   ])
 })

@@ -120,7 +120,7 @@ function emptySnapshot(folder: string, error: string | null): GleisSnapshot {
 type Git = (args: string[], cwd: string) => ReturnType<EngineInterface['process']['run']>
 
 const DIARY_FORMAT = '--format=%gD%x1f%H%x1f%gs'
-const MERGES_FORMAT = '--format=%H%x1f%P%x1f%ct%x1f%s'
+const MERGES_FORMAT = '--format=%H%x1f%P%x1f%ct%x1f%ce%x1f%s'
 
 /**
  * Liest das Tagebuch (reflog) aller Zweige, der GitHub-Zweige und jedes Ordners:

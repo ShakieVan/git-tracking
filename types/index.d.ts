@@ -110,6 +110,8 @@ export type DiaryMerge = {
   parents: string[]
   /** Sekunden seit 1970 (Zeit des Zusammenführens) */
   time: number
+  /** E-Mail dessen, der den Speicherstand angelegt hat; noreply@github.com = auf der GitHub-Webseite */
+  committer: string
   subject: string
 }
 

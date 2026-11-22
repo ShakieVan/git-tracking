@@ -49,16 +49,25 @@ export function parseTrack(stdout: string): DiaryTrack[] {
   return out
 }
 
-/** Liest `git log --first-parent --merges --format=%H%x1f%P%x1f%ct%x1f%s <GitHub-Hauptzweig>` */
+/** Liest `git log --first-parent --merges --format=%H%x1f%P%x1f%ct%x1f%ce%x1f%s <GitHub-Hauptzweig>` */
 export function parseMerges(stdout: string): DiaryMerge[] {
   const out: DiaryMerge[] = []
   for (const line of stdout.replace(/\r/g, '').split('\n')) {
-    const [hash, parents, time, subject] = line.split('\x1f')
+    const [hash, parents, time, committer, subject] = line.split('\x1f')
     if (!hash || !parents || !time) continue
-    out.push({ hash, parents: parents.split(' ').filter(Boolean), time: Number(time), subject: subject ?? '' })
+    out.push({
+      hash,
+      parents: parents.split(' ').filter(Boolean),
+      time: Number(time),
+      committer: committer ?? '',
+      subject: subject ?? '',
+    })
   }
   return out
 }
+
+/** Speicherstände, die GitHub selbst anlegt (Zusammenführen auf der Webseite), tragen diesen Ersteller */
+const GITHUB_COMMITTER = 'noreply@github.com'
 
 // ---------------------------------------------------------------- Ereignisse
 
@@ -125,8 +134,10 @@ export type DiaryEvent = {
   creates: ('branch' | 'remote' | 'folder')[]
   /** Gleich danach hochgeladen nach (z. B. origin/main) */
   pushed: string | null
-  /** Bei GitHub zusammengeführt: Nummer des Änderungsvorschlags (pull request) */
+  /** Bei GitHub zusammengeführt: Nummer des Änderungsvorschlags (pull request), wenn sie im Text steht */
   pr: number | null
+  /** Zusammenführen auf der GitHub-Webseite (nicht auf einem anderen Rechner) */
+  onGitHub: boolean
 }
 
 /** Bei GitHub zusammengeführt: der Zweig, mit GitHub-Ablage davor (origin/x), wenn dieser PC ihn noch kennt */
@@ -163,6 +174,7 @@ function mk(c: Classified, en: DiaryEntry, part: Partial<DiaryEvent>): DiaryEven
     creates: [],
     pushed: null,
     pr: null,
+    onGitHub: false,
     ...part,
   }
 }
@@ -216,6 +228,8 @@ export function remoteMergeEvents(diary: GleisDiary): DiaryEvent[] {
       creates: [],
       pushed: null,
       pr: pr ? Number(pr[1]) : null,
+      // Der Text lässt sich beim Zusammenführen ändern, der Ersteller nicht
+      onGitHub: !!pr || m.committer.toLowerCase() === GITHUB_COMMITTER,
     })
   }
   return out
@@ -860,9 +874,12 @@ export function eventLines(
       return { title: e.fetched(short(ev.remote)), detail: ev.branch ? '' : e.fetchedNoLocal }
     case 'remotemerge': {
       const source = remoteSource(ev)
-      const parts = [source ? e.mergedFrom(source.name) : '', ev.pr !== null ? e.pullRequest(ev.pr) : e.elsewhereHint]
+      const parts = [
+        source ? e.mergedFrom(source.name) : '',
+        ev.pr !== null ? e.pullRequest(ev.pr) : ev.onGitHub ? '' : e.elsewhereHint,
+      ]
       return {
-        title: ev.pr !== null ? e.mergedOnGitHub(short(ev.remote)) : e.mergedElsewhere(short(ev.remote)),
+        title: ev.onGitHub ? e.mergedOnGitHub(short(ev.remote)) : e.mergedElsewhere(short(ev.remote)),
         detail: parts.filter(Boolean).join(' · '),
       }
     }
