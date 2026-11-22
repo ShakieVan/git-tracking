@@ -1,7 +1,5 @@
 # Git-Tracking
 
-<img src=".claude-plugin/icon.png" alt="Git-Tracking" width="96" align="right">
-
 *[Deutsch weiter unten](#deutsch)*
 
 A Claude Code plugin that shows the Git state of the current project in a side pane – in every project, updated every 10 seconds and after every command or file change Claude makes. It only reads; it never changes the project.
