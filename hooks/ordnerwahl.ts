@@ -60,7 +60,8 @@ public static class GitTrackingPicker {
       try {
         Guid g = typeof(IShellItem).GUID;
         IShellItem folder;
-        SHCreateItemFromParsingName(start, IntPtr.Zero, ref g, out folder);
+        // Die Shell versteht nur Rückstriche (C:/x wäre kein gültiger Pfad)
+        SHCreateItemFromParsingName(start.Replace('/', '\\\\'), IntPtr.Zero, ref g, out folder);
         d.SetFolder(folder);
       } catch {}
     }
@@ -102,7 +103,7 @@ try {
   $d = New-Object System.Windows.Forms.FolderBrowserDialog
   $d.Description = $env:GT_TITLE
   $d.ShowNewFolderButton = $false
-  if ($env:GT_START) { $d.SelectedPath = $env:GT_START }
+  if ($env:GT_START) { $d.SelectedPath = $env:GT_START -replace '/', '\\' }
   if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { $picked = $d.SelectedPath }
 }
 $owner.Close()

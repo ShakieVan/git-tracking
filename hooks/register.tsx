@@ -518,9 +518,8 @@ async function pickFolder($: EngineInterface, tellClaude: boolean): Promise<void
   }
   const info = await $.session.info().catch(() => null)
   const { folder } = await shownFolder($)
-  // Im übergeordneten Ordner beginnen, damit die Nachbarprojekte zu sehen sind
-  const parent = folder.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]+$/, '')
-  const cmd = pickerCommand(info?.platform, t.pickTitle, parent || folder)
+  // Der Dialog beginnt im gerade gezeigten Ordner (Nutzerwunsch 22.11.2026, vorher im übergeordneten)
+  const cmd = pickerCommand(info?.platform, t.pickTitle, folder)
   if (!cmd) {
     $.ui.toast(t.noPicker)
     return
