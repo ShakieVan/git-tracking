@@ -30,6 +30,16 @@ When a conversation starts (and again after `/clear` or a compaction), Git-Track
 
 Nothing is added when there is nothing to report. The lines become part of what Claude Code sends to the model with the first message. Turn it off in the plugin settings: `claudeSummary`: `off`.
 
+The summary is about the folder the pane shows. If that is another folder than the session’s (for example a repository outside the project), Claude gets it for that folder – at the start, and again with your next message whenever you switch folders. The pane remembers the chosen folder for the session’s folder, so the next session there starts with it.
+
+## Buttons
+
+- **📁 Choose folder …** opens the system’s folder dialog (Windows: the Explorer dialog via Windows PowerShell; macOS: `osascript`; Linux: `zenity`) and shows the chosen folder.
+- **💬 Give to Claude** hands Claude the current Git state of the shown folder. It is not typed into your prompt box: Claude reads it with your next message, and a line in the conversation says so.
+- **Back to this project** shows the session’s own folder again.
+
+The question box on a commit card is different: it writes your question into the prompt box, and you send it yourself.
+
 ## Language
 
 English and German. The pane follows the system language; **DE | EN** at the top of the pane switches it (remembered). It can also be set in the plugin settings (`language`: `auto`, `de`, `en`).
@@ -95,6 +105,16 @@ Beim Start einer Unterhaltung (und wieder nach `/clear` oder dem Zusammenfassen)
 - was noch nicht hochgeladen oder abgeholt ist, Beiseitegelegtes (stash), die letzte Git-Aktion im Ordner und wie oft der Hauptordner zuletzt zwischen Zweigen umgeschaltet wurde
 
 Ist nichts auffällig, kommt nichts dazu. Die Zeilen gehen mit der ersten Nachricht an das Modell. Abschalten in den Plugin-Einstellungen: `claudeSummary`: `off`.
+
+Die Kurzfassung gilt dem Ordner, den das Fenster zeigt. Ist das ein anderer als der Ordner der Sitzung (zum Beispiel eine Git-Ablage außerhalb des Projekts), bekommt Claude sie für diesen Ordner – beim Start und bei jedem Ordnerwechsel wieder mit deiner nächsten Nachricht. Das Fenster merkt sich den gewählten Ordner je Sitzungsordner; die nächste Sitzung dort beginnt damit.
+
+### Knöpfe
+
+- **📁 Ordner wählen …** öffnet den Auswahldialog des Systems (Windows: der Explorer-Dialog über Windows PowerShell; macOS: `osascript`; Linux: `zenity`) und zeigt den gewählten Ordner.
+- **💬 An Claude geben** gibt Claude den aktuellen Git-Stand des gezeigten Ordners. Er landet nicht in deinem Eingabefeld: Claude liest ihn mit deiner nächsten Nachricht, und eine Zeile im Gespräch sagt es.
+- **Zurück zu diesem Projekt** zeigt wieder den Ordner der Sitzung.
+
+Das Fragefeld an einem Speicherstand arbeitet anders: Es schreibt deine Frage in das Eingabefeld, abschicken musst du selbst.
 
 ### Sprache
 

@@ -35,7 +35,8 @@ import type { DiaryEvent } from './ebenen'
 import { texts } from './i18n'
 import type { Lang, Texts } from './i18n'
 import { briefText, readBrief } from './kurzfassung'
-import type { BriefNewest, BriefRun } from './kurzfassung'
+import type { BriefMode, BriefNewest, BriefRun } from './kurzfassung'
+import { pickedFolder, pickerCommand } from './ordnerwahl'
 
 const PANE = 'git-tracking'
 const TITLE = 'Git-Tracking'
@@ -341,31 +342,76 @@ const BRIEF_FRESH_MS = 120_000
 /** So lange wartet Claudes erste Nachricht höchstens auf die vorgelesene Kurzfassung */
 const BRIEF_WAIT_MS = 8000
 
+type Brief = { text: string; root: string }
+
 /** Beim Sitzungsstart vorgelesen, damit die erste Nachricht nicht auf Git warten muss */
-let warmBrief: { cwd: string; at: number; brief: Promise<string | null> } | null = null
+let warmBrief: { folder: string; mode: BriefMode; at: number; brief: Promise<Brief | null> } | null = null
+
+/** Der Ordner, den das Fenster zeigt, und ob es der Ordner der Sitzung ist */
+async function shownFolder($: EngineInterface): Promise<{ folder: string; isOwn: boolean }> {
+  const cwd = await $.session.cwd()
+  const f = (await read($, view)).folder
+  return f && !samePath(f, cwd) ? { folder: f, isOwn: false } : { folder: cwd, isOwn: true }
+}
 
 function startBrief($: EngineInterface): void {
   warmBrief = null
   void (async () => {
-    const cwd = await $.session.cwd()
+    const { folder, isOwn } = await shownFolder($)
     const at = await $.clock.now()
-    warmBrief = { cwd, at, brief: claudeBrief($, cwd, at).catch(() => null) }
+    const mode: BriefMode = isOwn ? 'start' : 'startShown'
+    warmBrief = { folder, mode, at, brief: claudeBrief($, folder, at, mode).catch(() => null) }
   })().catch(() => undefined)
 }
 
-/** Die Kurzfassung für den Ordner der Sitzung: vorgelesen, wenn frisch, sonst jetzt gelesen */
+/**
+ * Die Kurzfassung für den Start einer Unterhaltung: für den Ordner, den das Fenster
+ * zeigt – vorgelesen, wenn frisch, sonst jetzt gelesen.
+ */
 async function currentBrief($: EngineInterface): Promise<string | null> {
-  const cwd = await $.session.cwd()
+  const { folder, isOwn } = await shownFolder($)
+  const mode: BriefMode = isOwn ? 'start' : 'startShown'
   const now = await $.clock.now()
   const w = warmBrief
-  if (w && samePath(w.cwd, cwd) && now - w.at < BRIEF_FRESH_MS) {
-    return Promise.race([w.brief, $.clock.sleep(BRIEF_WAIT_MS).then(() => null)])
+  if (w && w.mode === mode && samePath(w.folder, folder) && now - w.at < BRIEF_FRESH_MS) {
+    const b = await Promise.race([w.brief, $.clock.sleep(BRIEF_WAIT_MS).then(() => null)])
+    return b?.text ?? null
   }
-  return claudeBrief($, cwd, now)
+  return (await claudeBrief($, folder, now, mode))?.text ?? null
 }
 
-/** Die Kurzfassung des Git-Stands in einem Ordner; null = kein Git oder nichts auffällig */
-async function claudeBrief($: EngineInterface, cwd: string, now: number): Promise<string | null> {
+/**
+ * Gibt Claude den Stand des gezeigten Ordners: eine Zeile für das Modell, die mit der
+ * nächsten Anfrage mitgeht (für den Nutzer nicht als getippter Text sichtbar).
+ */
+async function handBrief($: EngineInterface, mode: 'switched' | 'handed'): Promise<{ project: string } | 'none' | 'failed'> {
+  const { folder } = await shownFolder($)
+  const now = await $.clock.now()
+  const b = await claudeBrief($, folder, now, mode).catch(() => null)
+  if (!b) return 'none'
+  const r = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text: b.text }] } }).catch(() => null)
+  if (!r || r.deny !== undefined) return 'failed'
+  return { project: baseName(b.root) }
+}
+
+/** Eine Zeile im Verlauf (nur für den Nutzer) und ein kurzer Hinweis: Claude hat den Stand */
+async function noticeHanded($: EngineInterface, project: string): Promise<void> {
+  const t = texts(await read($, lang))
+  await $.session.append({ message: { type: 'system', content: [{ type: 'text', text: t.handedNotice(project) }] } }).catch(() => null)
+  $.ui.toast(t.handedToast(project))
+}
+
+/** Knopf „An Claude geben“ */
+async function handNow($: EngineInterface): Promise<void> {
+  const t = texts(await read($, lang))
+  const r = await handBrief($, 'handed')
+  if (r === 'none') $.ui.toast(t.nothingToHand)
+  else if (r === 'failed') $.ui.toast(t.handFailed)
+  else await noticeHanded($, r.project)
+}
+
+/** Die Kurzfassung des Git-Stands in einem Ordner; null = kein Git oder (beim Start) nichts auffällig */
+async function claudeBrief($: EngineInterface, cwd: string, now: number, mode: BriefMode): Promise<Brief | null> {
   const git: BriefRun = (args, dir) => $.process.run([...GIT, ...args], { cwd: dir, timeoutMs: 8000 })
   const newest: BriefNewest = async (folder, paths) => {
     const base = folder.replace(/[\\/]+$/, '')
@@ -376,7 +422,87 @@ async function claudeBrief($: EngineInterface, cwd: string, now: number): Promis
     return times.length > 0 ? Math.max(...times) : null
   }
   const data = await readBrief(git, newest, cwd, now)
-  return data ? briefText(data, now, texts(await read($, lang))) : null
+  if (!data) return null
+  const text = briefText(data, now, texts(await read($, lang)), mode)
+  return text ? { text, root: data.here.path } : null
+}
+
+// ---------------------------------------------------------------- Anderer Ordner
+
+/** Unter diesem Schlüssel merkt sich das Plugin je Sitzungsordner den zuletzt gewählten Ordner */
+const FOLDERS_KEY = 'folders'
+const folderKey = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+
+async function rememberedFolders($: EngineInterface): Promise<Record<string, string>> {
+  const v = await $.store.get(FOLDERS_KEY).catch(() => undefined)
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
+  const out: Record<string, string> = {}
+  for (const [k, f] of Object.entries(v as Record<string, unknown>)) if (typeof f === 'string') out[k] = f
+  return out
+}
+
+async function rememberFolder($: EngineInterface, cwd: string, folder: string | null): Promise<void> {
+  const all = await rememberedFolders($)
+  if (folder) all[folderKey(cwd)] = folder
+  else delete all[folderKey(cwd)]
+  await $.store.set(FOLDERS_KEY, all).catch(() => undefined)
+}
+
+/**
+ * Zeigt einen anderen Ordner (null = den der Sitzung) und merkt ihn sich für diesen
+ * Sitzungsordner. Hat er gewechselt und ist `tellClaude` an, bekommt Claude den neuen
+ * Stand mit der nächsten Nachricht; dann kommt der Projektname zurück.
+ */
+async function showFolder($: EngineInterface, folder: string | null, tellClaude: boolean): Promise<string | null> {
+  const cwd = await $.session.cwd()
+  const next = folder && !samePath(folder, cwd) ? folder : null
+  const before = (await read($, view)).folder
+  await update($, view, v => ({ ...v, folder: next }))
+  await update($, selected, () => null)
+  await rememberFolder($, cwd, next)
+  const same = before === next || (before !== null && next !== null && samePath(before, next))
+  const [, told] = await Promise.all([refresh($), same || !tellClaude ? Promise.resolve(null) : handBrief($, 'switched')])
+  return told && typeof told === 'object' ? told.project : null
+}
+
+let picking = false
+/** Nach so langer Zeit gibt das Plugin das Warten auf den Auswahldialog auf (Höchstwert von process.run) */
+const PICK_TIMEOUT_MS = 600_000
+
+/** Knopf „Ordner wählen …“: Auswahldialog des Systems, dann den Ordner zeigen */
+async function pickFolder($: EngineInterface, tellClaude: boolean): Promise<void> {
+  const t = texts(await read($, lang))
+  if (picking) {
+    $.ui.toast(t.picking)
+    return
+  }
+  const info = await $.session.info().catch(() => null)
+  const { folder } = await shownFolder($)
+  // Im übergeordneten Ordner beginnen, damit die Nachbarprojekte zu sehen sind
+  const parent = folder.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]+$/, '')
+  const cmd = pickerCommand(info?.platform, t.pickTitle, parent || folder)
+  if (!cmd) {
+    $.ui.toast(t.noPicker)
+    return
+  }
+  picking = true
+  $.ui.toast(t.picking)
+  try {
+    const r = await $.process.run(cmd.argv, { env: cmd.env, timeoutMs: PICK_TIMEOUT_MS })
+    const chosen = pickedFolder(r.stdout)
+    if (!chosen) {
+      // zenity meldet Abbrechen mit 1 und ohne Text; sonst ist ein Fehlertext ein Fehler
+      const err = r.stderr.replace(/#< CLIXML[\s\S]*$/, '').trim()
+      if (r.exitCode !== 0 && err) $.ui.toast(t.pickFailed(err.split('\n')[0]!))
+      return
+    }
+    const told = await showFolder($, chosen, tellClaude)
+    if (told) await noticeHanded($, told)
+  } catch (err) {
+    $.ui.toast(t.pickFailed(String(err)))
+  } finally {
+    picking = false
+  }
 }
 
 // ---------------------------------------------------------------- Anklicken und Fragen
@@ -484,6 +610,9 @@ async function copyForNewChat(
 }
 
 export const register: Register = (on, options) => {
+  /** Kurzfassung für Claude beim Start und beim Ordnerwechsel (der Knopf „An Claude geben“ geht immer) */
+  const summaryOn = options.claudeSummary !== 'off'
+
   on('session.start', async ($, e, next) => {
     const l = await chooseLang($, options.language)
     await update($, lang, () => l)
@@ -493,7 +622,11 @@ export const register: Register = (on, options) => {
       description: t.commandDescription,
       argumentHint: t.commandArg,
     })
-    if (options.claudeSummary !== 'off') startBrief($)
+    // Zuletzt für diesen Sitzungsordner gewählter Ordner (z. B. Git-Ablage außerhalb des Projekts)
+    const cwd = await $.session.cwd()
+    const remembered = (await rememberedFolders($))[folderKey(cwd)]
+    if (remembered && (await read($, view)).folder === null) await update($, view, v => ({ ...v, folder: remembered }))
+    if (summaryOn) startBrief($)
     // Ohne angeschlossene Oberfläche (z. B. claude -p) lehnt ui.open ab – dann eben kein Fenster.
     void refresh($)
       .then(() => $.ui.open({ id: PANE, title: TITLE }))
@@ -508,10 +641,9 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'git-tracking' }, async ($, e) => {
     const t = texts(await read($, lang))
     const arg = e.args.trim().replace(/^"(.*)"$/, '$1')
-    await update($, view, v => ({ ...v, folder: arg || null }))
-    await refresh($)
+    const told = await showFolder($, arg || null, summaryOn)
     const opened = await $.ui.open({ id: PANE, title: TITLE }).catch(() => null)
-    const where = arg ? t.shows(arg) : t.showsThis
+    const where = (arg ? t.shows(arg) : t.showsThis) + (told ? t.claudeGetsIt : '')
 
     return { text: opened?.isPlaced === false ? `${where}${t.paneLater}` : where }
   })
@@ -551,6 +683,21 @@ export const register: Register = (on, options) => {
 
     if (!snap) return <Text dimColor>{t.reading}</Text>
 
+    // Ordner wählen, Stand an Claude geben, zurück zum Ordner der Sitzung
+    const projectRow = (isOther: boolean, canHand: boolean) => (
+      <Box flexDirection="row" gap={1} flexWrap="wrap">
+        <Button
+          key="ordner-waehlen"
+          label={t.pickFolder}
+          onPress={() => void $.clock.after(0, () => void pickFolder($, summaryOn))}
+        />
+        {canHand && <Button key="an-claude" label={t.handToClaude} onPress={() => void handNow($)} />}
+        {isOther && (
+          <Button key="home" label={t.backToProject} onPress={() => void showFolder($, null, summaryOn)} />
+        )}
+      </Box>
+    )
+
     if (!snap.root) {
       return (
         <Box flexDirection="column" gap={1}>
@@ -569,6 +716,7 @@ export const register: Register = (on, options) => {
               {t.otherProjectHint}
             </Text>
           )}
+          {!isWidget && projectRow(v.folder !== null, false)}
         </Box>
       )
     }
@@ -626,6 +774,11 @@ export const register: Register = (on, options) => {
           <Text dimColor> · {where}</Text>
         </Text>
         <Text wrap="wrap">🚆 {trackLine}</Text>
+        {v.folder !== null && (
+          <Text dimColor size="caption" wrap="truncate-start">
+            📁 {root}
+          </Text>
+        )}
         {chips.map(c =>
           c.icon ? (
             <Box flexDirection="row" gap={1} alignItems="center">
@@ -659,7 +812,8 @@ export const register: Register = (on, options) => {
         </Box>
       ) : null
 
-    const otherFolder = v.folder !== null && !samePath(v.folder, root)
+    // Ein Ordner ist gewählt, also nicht der der Sitzung (showFolder setzt ihn sonst auf null)
+    const otherFolder = v.folder !== null
     const makeButtons = (moreEbenen: boolean) => (
       <Box flexDirection="row" gap={1} flexWrap="wrap">
         <Button key="reload" label={t.reload} onPress={() => void refresh($)} />
@@ -697,16 +851,10 @@ export const register: Register = (on, options) => {
             onPress={() => void update($, view, x => ({ ...x, limit: x.limit + 60 })).then(() => refresh($))}
           />
         )}
-        {otherFolder && (
-          <Button
-            key="home"
-            label={t.backToProject}
-            onPress={() => void update($, view, x => ({ ...x, folder: null })).then(() => refresh($))}
-          />
-        )}
       </Box>
     )
     const buttons = makeButtons(false)
+    const projectButtons = projectRow(otherFolder, true)
     const modeSwitch = (
       <Box flexDirection="row" gap={1} alignItems="center" flexWrap="wrap">
         <Button
@@ -767,6 +915,7 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column" gap={1}>
           {header}
+          {projectButtons}
           <Text dimColor>{t.noCommits}</Text>
           {buttons}
         </Box>
@@ -778,6 +927,7 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column" gap={1}>
           {header}
+          {projectButtons}
           {worktrees}
           <Box flexDirection="column">
             {snap.textGraph.slice(0, Math.max(room, 40)).map(line => (
@@ -884,6 +1034,7 @@ export const register: Register = (on, options) => {
         return (
           <Box flexDirection="column" gap={1}>
             {header}
+            {projectButtons}
             {modeSwitch}
             <Text dimColor>{t.readingDiary}</Text>
           </Box>
@@ -1095,6 +1246,7 @@ export const register: Register = (on, options) => {
       return (
         <Box flexDirection="column" gap={1}>
           {header}
+          {projectButtons}
           {modeSwitch}
           <Box flexDirection="column" gap={0}>
             {out}
@@ -1241,6 +1393,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column" gap={1}>
         {header}
+        {projectButtons}
         {modeSwitch}
         {worktrees}
         <Box flexDirection="column" gap={0}>

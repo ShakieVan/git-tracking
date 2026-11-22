@@ -283,9 +283,18 @@ export function isNotable(d: BriefData): boolean {
   )
 }
 
-/** Die Kurzfassung als Text; null, wenn nichts auffällig ist */
-export function briefText(d: BriefData, nowMs: number, t: Texts): string | null {
-  if (!isNotable(d)) return null
+/**
+ * Wofür die Kurzfassung gedacht ist:
+ * start = Start der Unterhaltung, Ordner der Sitzung (nur wenn etwas auffällig ist);
+ * startShown = Start der Unterhaltung, aber das Fenster zeigt einen anderen Ordner;
+ * switched = der Nutzer hat im Fenster auf einen anderen Ordner gewechselt;
+ * handed = der Nutzer hat den Stand per Knopf an Claude gegeben.
+ */
+export type BriefMode = 'start' | 'startShown' | 'switched' | 'handed'
+
+/** Die Kurzfassung als Text; null, wenn beim Start nichts auffällig ist */
+export function briefText(d: BriefData, nowMs: number, t: Texts, mode: BriefMode = 'start'): string | null {
+  if (mode === 'start' && !isNotable(d)) return null
   const b = t.brief
   const nowS = Math.floor(nowMs / 1000)
   const recent = (s: number) => nowS - s < 14 * 86400
@@ -303,7 +312,7 @@ export function briefText(d: BriefData, nowMs: number, t: Texts): string | null 
   }
 
   const h = d.here
-  const out: string[] = [b.head(fullDate(nowS))]
+  const out: string[] = [b.head(fullDate(nowS), mode)]
   out.push(h.isMain ? b.folderMain(h.path, where(h)) : b.folderLinked(h.path, d.mainPath, where(h)))
   out.push(b.hereWork(work(h)))
   if (d.last) out.push(b.last(b.action(d.last), when(d.last.time)))

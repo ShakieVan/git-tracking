@@ -1,6 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { TestBody } from 'claude-code/testing'
 
+import { encodePowerShell, pickedFolder, pickerCommand } from '../hooks/ordnerwahl'
+
 const PANE = {
   plugin: 'git-tracking',
   component: 'Pane',
@@ -322,7 +324,7 @@ test('Kurzfassung: Claude bekommt beim Start den Git-Stand als Kontext-Block', {
   const block = res.blocks.find(b => b.name === 'gitTracking')
   expect(block).toBeDefined()
   const text = block!.text
-  expect(text).toContain('Dieser Ordner C:/Projekte/Demo ist der Hauptordner der Ablage und steht auf dem Hauptzweig main.')
+  expect(text).toContain('Der Ordner C:/Projekte/Demo ist der Hauptordner der Ablage und steht auf dem Hauptzweig main.')
   expect(text).toContain('In diesem Ordner: geändert, noch nicht festgehalten (uncommitted): 1 Datei geändert, 1 neue Datei; zuletzt bearbeitet gerade eben')
   expect(text).toContain('Letzte Git-Aktion in diesem Ordner: festgehalten (commit) „Feature work“')
   expect(text).toContain('Noch nicht hochgeladen (push): 2 Speicherstände.')
@@ -340,7 +342,7 @@ test('Summary: the same in English', { options: { language: 'en' } }, async ($, 
   briefHooks(on, answerGit)
   await $.session.start({ cwd: 'C:/Projekte/Demo', surface: 'desktop', isInteractive: true })
   const text = (await $.prompt.context({ blocks: [] })).blocks.find(b => b.name === 'gitTracking')?.text ?? ''
-  expect(text).toContain('This folder C:/Projekte/Demo is the repository\'s main folder and is on the main branch main.')
+  expect(text).toContain('The folder C:/Projekte/Demo is the repository\'s main folder and is on the main branch main.')
   expect(text).toContain('Branches besides main: 2. Not merged yet: feature (last commit 6 min ago), idee (2 commits only on this computer, last commit 10 min ago).')
   expect(text).toContain('Last Git action in this folder: commit “Feature work”')
 })
@@ -382,4 +384,110 @@ test('Kurzfassung: abgeschaltet – kein Block', { options: { language: 'de', cl
   await $.session.start({ cwd: 'C:/Projekte/Demo', surface: 'desktop', isInteractive: true })
   const res = await $.prompt.context({ blocks: [] })
   expect(res.blocks.find(b => b.name === 'gitTracking')).toBeUndefined()
+})
+
+// ---------------------------------------------------------------- Anderer Ordner, Ordnerwahl, An Claude geben
+
+const NO_GIT = { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository', isStdoutTruncated: false, isStderrTruncated: false }
+
+/** Sitzung in C:/Leer (ohne Git); Git antwortet nur für C:/Projekte/Demo, der Auswahldialog wählt Demo */
+function otherFolderHooks(on: Parameters<TestBody>[1], dialogRuns: string[][]) {
+  on('command.register', () => ({ value: { command: 'git-tracking' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [] }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('session.cwd', () => ({ value: 'C:/Leer' }))
+  on('session.surfaces', () => ({ value: ['desktop'] }))
+  on('session.info', () => ({ value: { platform: 'windows', transcriptPath: 'C:/t.jsonl' } as never }))
+  on('process.run', (_, e) => {
+    if (e.argv[0] === 'powershell') {
+      dialogRuns.push([...e.argv])
+      return { value: ok('C:\\Projekte\\Demo\r\n') }
+    }
+    const cwd = (e.init?.cwd ?? 'C:/Leer').replace(/\\/g, '/')
+    return { value: cwd.startsWith('C:/Leer') ? NO_GIT : answerGit(e.argv) }
+  })
+  on('fs.stat', () => ({ value: { kind: 'file', size: 10, mtimeMs: 1795000550 * 1000, isLink: false } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.run', () => ({ text: '' }))
+  on('prompt.context', (_, e) => ({ blocks: e.blocks }))
+}
+
+const CMD = { command: 'git-tracking', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } } as const
+
+test('Anderer Ordner: Claude bekommt den Stand des gezeigten Ordners – beim Wechsel und beim Start', { options: { language: 'de' } }, async ($, on) => {
+  mock.clock(on, { now: NOW_MS })
+  const session = mock.session(on)
+  otherFolderHooks(on, [])
+  await $.session.start({ cwd: 'C:/Leer', surface: 'desktop', isInteractive: true })
+
+  // Der Sitzungsordner hat kein Git: beim Start keine Kurzfassung
+  expect((await $.prompt.context({ blocks: [] })).blocks.find(b => b.name === 'gitTracking')).toBeUndefined()
+
+  // /git-tracking <Ordner>: Claude bekommt den Stand mit der nächsten Nachricht
+  const r = await $.command.run({ ...CMD, args: 'C:/Projekte/Demo' })
+  expect(r.text).toContain('Claude bekommt den Git-Stand mit deiner nächsten Nachricht.')
+  const rows = JSON.stringify(session.appended())
+  expect(rows).toContain('der Nutzer hat im Git-Tracking-Fenster auf dieses Projekt gewechselt')
+  expect(rows).toContain('Der Ordner C:/Projekte/Demo ist der Hauptordner der Ablage')
+
+  // Neuer Startkontext (z. B. nach /clear): Kurzfassung des gezeigten Ordners, auch wenn alles ruhig wäre
+  const text = (await $.prompt.context({ blocks: [] })).blocks.find(b => b.name === 'gitTracking')?.text ?? ''
+  expect(text).toContain('Git-Stand des Projekts, das der Nutzer im Git-Tracking-Fenster gewählt hat (nicht der Ordner dieser Sitzung)')
+  expect(text).toContain('Der Ordner C:/Projekte/Demo ist der Hauptordner der Ablage')
+
+  // Derselbe Ordner noch einmal: nichts Neues an Claude
+  const count = session.appended().length
+  await $.command.run({ ...CMD, args: 'C:/Projekte/Demo' })
+  expect(session.appended().length).toBe(count)
+})
+
+test('Knöpfe: „Ordner wählen …“ öffnet den Dialog, „An Claude geben“ übergibt den Stand', { options: { language: 'de' } }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW_MS })
+  const session = mock.session(on)
+  const dialogRuns: string[][] = []
+  otherFolderHooks(on, dialogRuns)
+  await $.session.start({ cwd: 'C:/Leer', surface: 'desktop', isInteractive: true })
+  await $.command.run({ ...CMD, args: '' })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /Kein Git-Projekt/ })).toBeDefined()
+  // Ohne Git-Projekt gibt es nichts zu übergeben, nur die Ordnerwahl
+  expect(await ui.find({ key: 'an-claude' })).toBeUndefined()
+
+  await ui.press({ key: 'ordner-waehlen' })
+  await clock.advance(1)
+  const rowsText = () => JSON.stringify(session.appended())
+  for (let i = 0; i < 50 && !rowsText().includes('Claude bekommt den Git-Stand von'); i++) await ui.findAll({ type: 'Text' })
+  expect(dialogRuns.length).toBe(1)
+  expect(dialogRuns[0]).toContain('-EncodedCommand')
+  expect(rowsText()).toContain('auf dieses Projekt gewechselt')
+  expect(rowsText()).toContain('Git-Tracking: Claude bekommt den Git-Stand von „Demo“ mit deiner nächsten Nachricht.')
+
+  // Das Fenster zeigt jetzt Demo, mit Pfad und den Knöpfen
+  let texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join(' | ')
+  for (let i = 0; i < 20 && !texts.includes('📁 C:/Projekte/Demo'); i++) texts = (await ui.findAll({ type: 'Text' })).map(t => t.text).join(' | ')
+  expect(texts).toContain('📁 C:/Projekte/Demo')
+
+  await ui.press({ key: 'an-claude' })
+  expect(rowsText()).toContain('der Nutzer hat den aktuellen Git-Stand dieses Projekts an Claude gegeben')
+
+  // Zurück zum Sitzungsordner
+  await ui.press({ key: 'home' })
+  expect(await ui.find({ type: 'Text', text: /Kein Git-Projekt/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('Ordnerwahl: Befehl je System und Auswertung der Antwort', async () => {
+  expect(pickerCommand('windows', 'T', 'E:/X')?.argv).toContain('-STA')
+  expect(pickerCommand('windows', 'T', 'E:/X')?.env.GT_START).toBe('E:/X')
+  expect(pickerCommand('macos', 'T', null)?.argv[0]).toBe('osascript')
+  expect(pickerCommand('linux', 'T', '/home/a')?.argv).toContain('--filename=/home/a/')
+  expect(pickerCommand('unknown', 'T', null)).toBeNull()
+  expect(pickedFolder('C:\\Projekte\\Demo\r\n')).toBe('C:\\Projekte\\Demo')
+  expect(pickedFolder('/Users/a/Projekt/\n')).toBe('/Users/a/Projekt')
+  expect(pickedFolder('C:\\')).toBe('C:\\')
+  expect(pickedFolder('')).toBeNull()
+  // Base64 von UTF-16LE: "A" = 41 00
+  expect(encodePowerShell('A')).toBe('QQA=')
 })

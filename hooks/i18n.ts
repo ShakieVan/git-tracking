@@ -92,6 +92,18 @@ export type Texts = {
   shows: (arg: string) => string
   showsThis: string
   paneLater: string
+  claudeGetsIt: string
+  // Folder choice and handing the state to Claude
+  pickFolder: string
+  pickTitle: string
+  picking: string
+  noPicker: string
+  pickFailed: (err: string) => string
+  handToClaude: string
+  handedNotice: (project: string) => string
+  handedToast: (project: string) => string
+  nothingToHand: string
+  handFailed: string
   // Graph texts
   quoted: (name: string) => string
   theMain: string
@@ -172,7 +184,7 @@ export type Texts = {
 export type BriefAction = { kind: string; subject: string; from?: string; to?: string }
 
 export type BriefTexts = {
-  head: (date: string) => string
+  head: (date: string, mode: 'start' | 'startShown' | 'switched' | 'handed') => string
   folderMain: (path: string, where: string) => string
   folderLinked: (path: string, mainPath: string, where: string) => string
   onMain: (b: string) => string
@@ -297,6 +309,17 @@ const de: Texts = {
   shows: a => `Git-Tracking zeigt jetzt: ${a}`,
   showsThis: 'Git-Tracking zeigt dieses Projekt.',
   paneLater: ' (das Fenster erscheint, sobald Platz ist)',
+  claudeGetsIt: ' Claude bekommt den Git-Stand mit deiner nächsten Nachricht.',
+  pickFolder: '📁 Ordner wählen …',
+  pickTitle: 'Git-Projekt für Git-Tracking wählen',
+  picking: 'Der Auswahldialog ist offen (eventuell hinter diesem Fenster).',
+  noPicker: 'Auf diesem System gibt es keinen Auswahldialog – „/git-tracking Ordner“ eintippen.',
+  pickFailed: e => `Der Auswahldialog ließ sich nicht öffnen: ${e}`,
+  handToClaude: '💬 An Claude geben',
+  handedNotice: p => `Git-Tracking: Claude bekommt den Git-Stand von „${p}“ mit deiner nächsten Nachricht.`,
+  handedToast: p => `Git-Stand von „${p}“ an Claude gegeben`,
+  nothingToHand: 'Kein Git-Projekt – nichts an Claude gegeben.',
+  handFailed: 'Der Git-Stand ließ sich nicht an Claude geben.',
   quoted: n => `„${n}“`,
   theMain: 'der Hauptzweig',
   unnamedBranch: 'ein Zweig ohne Namen',
@@ -377,10 +400,17 @@ const de: Texts = {
     cloned: 'Von GitHub kopiert',
   },
   brief: {
-    head: d =>
-      `Git-Tracking (Erweiterung des Nutzers) – Git-Stand dieses Projekts beim Start der Unterhaltung (${d}), nur gelesen; Git-Begriffe in Klammern:`,
-    folderMain: (p, w) => `- Dieser Ordner ${p} ist der Hauptordner der Ablage und ${w}.`,
-    folderLinked: (p, m, w) => `- Dieser Ordner ${p} ist ein zusätzliches Arbeitsverzeichnis (worktree) der Ablage ${m} und ${w}.`,
+    head: (d, mode) =>
+      'Git-Tracking (Erweiterung des Nutzers) – ' +
+      {
+        start: `Git-Stand dieses Projekts beim Start der Unterhaltung (${d})`,
+        startShown: `Git-Stand des Projekts, das der Nutzer im Git-Tracking-Fenster gewählt hat (nicht der Ordner dieser Sitzung), beim Start der Unterhaltung (${d})`,
+        switched: `der Nutzer hat im Git-Tracking-Fenster auf dieses Projekt gewechselt; Git-Stand vom ${d}`,
+        handed: `der Nutzer hat den aktuellen Git-Stand dieses Projekts an Claude gegeben (${d})`,
+      }[mode] +
+      ', nur gelesen; Git-Begriffe in Klammern:',
+    folderMain: (p, w) => `- Der Ordner ${p} ist der Hauptordner der Ablage und ${w}.`,
+    folderLinked: (p, m, w) => `- Der Ordner ${p} ist ein zusätzliches Arbeitsverzeichnis (worktree) der Ablage ${m} und ${w}.`,
     onMain: b => `steht auf dem Hauptzweig ${b}`,
     onBranch: b => `steht auf dem Entwicklungszweig (branch) ${b}`,
     detached: h => `steht ohne Zweig auf Speicherstand ${h} (detached HEAD)`,
@@ -534,6 +564,17 @@ const en: Texts = {
   shows: a => `Git-Tracking now shows: ${a}`,
   showsThis: 'Git-Tracking shows this project.',
   paneLater: ' (the pane appears once there is room)',
+  claudeGetsIt: ' Claude gets the Git state with your next message.',
+  pickFolder: '📁 Choose folder …',
+  pickTitle: 'Choose a Git project for Git-Tracking',
+  picking: 'The folder dialog is open (it may be behind this window).',
+  noPicker: 'No folder dialog on this system – type “/git-tracking <folder>”.',
+  pickFailed: e => `The folder dialog could not be opened: ${e}`,
+  handToClaude: '💬 Give to Claude',
+  handedNotice: p => `Git-Tracking: Claude gets the Git state of “${p}” with your next message.`,
+  handedToast: p => `Git state of “${p}” given to Claude`,
+  nothingToHand: 'Not a Git project – nothing given to Claude.',
+  handFailed: 'The Git state could not be given to Claude.',
   quoted: n => `“${n}”`,
   theMain: 'the main branch',
   unnamedBranch: 'an unnamed branch',
@@ -612,9 +653,17 @@ const en: Texts = {
     cloned: 'Cloned from GitHub',
   },
   brief: {
-    head: d => `Git-Tracking (the user's mod) – Git state of this project when the conversation started (${d}), read-only:`,
-    folderMain: (p, w) => `- This folder ${p} is the repository's main folder and ${w}.`,
-    folderLinked: (p, m, w) => `- This folder ${p} is a linked worktree of the repository ${m} and ${w}.`,
+    head: (d, mode) =>
+      "Git-Tracking (the user's mod) – " +
+      {
+        start: `Git state of this project when the conversation started (${d})`,
+        startShown: `Git state of the project the user chose in the Git-Tracking pane (not this session's folder) when the conversation started (${d})`,
+        switched: `the user switched the Git-Tracking pane to this project; Git state as of ${d}`,
+        handed: `the user gave Claude the current Git state of this project (${d})`,
+      }[mode] +
+      ', read-only:',
+    folderMain: (p, w) => `- The folder ${p} is the repository's main folder and ${w}.`,
+    folderLinked: (p, m, w) => `- The folder ${p} is a linked worktree of the repository ${m} and ${w}.`,
     onMain: b => `is on the main branch ${b}`,
     onBranch: b => `is on branch ${b}`,
     detached: h => `is on commit ${h} without a branch (detached HEAD)`,
