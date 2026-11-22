@@ -132,6 +132,12 @@ export type GleisView = {
 /** Der angeklickte Speicherstand mit seinen Details */
 export type GleisSelection = {
   hash: string
+  /**
+   * Welche Zeile der Drei-Ebenen-Ansicht angeklickt wurde (siehe eventKey). Mehrere Zeilen
+   * können denselben Speicherstand zeigen; Karte und Kreis gehören an die angeklickte.
+   * null = im Gleisplan gewählt.
+   */
+  row: string | null
   /** Geänderte Dateien mit Umfang, höchstens 12 */
   files: string[]
   /** z. B. "3 Dateien geändert (+40 / −12)" */

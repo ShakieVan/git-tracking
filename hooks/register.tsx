@@ -30,8 +30,18 @@ import {
   shorten,
 } from './graph'
 import type { IconKind, RowEvent } from './graph'
-import { COL_ORD, COL_PC, diaryEvents, ebenenModel, ebenenSlices, eventLines, parseDiary, parseTrack } from './ebenen'
-import type { DiaryEvent } from './ebenen'
+import {
+  COL_ORD,
+  COL_PC,
+  diaryEvents,
+  ebenenModel,
+  ebenenSlices,
+  eventKey,
+  eventLines,
+  parseDiary,
+  parseTrack,
+} from './ebenen'
+import type { DiaryEvent, EbenenRow } from './ebenen'
 import { texts } from './i18n'
 import type { Lang, Texts } from './i18n'
 import { briefText, readBrief } from './kurzfassung'
@@ -52,7 +62,7 @@ const view = atom(
   { limit: 80, scope: 'all', folder: null, compact: true, mode: 'ebenen', events: 60 },
   { shape: 'view-4' },
 )
-const selected = atom({ plugin: 'git-tracking', key: 'selected' } as const, null, { shape: 'selected-2' })
+const selected = atom({ plugin: 'git-tracking', key: 'selected' } as const, null, { shape: 'selected-3' })
 const draft = atom({ plugin: 'git-tracking', key: 'draft' } as const, '', { shape: 'draft-1' })
 /** Sprache der Anzeige: de oder en */
 const lang = atom({ plugin: 'git-tracking', key: 'lang' } as const, 'en', { shape: 'lang-1' })
@@ -544,15 +554,29 @@ function pillsFor(
   }))
 }
 
-/** Klick auf eine Zeile: Details aufklappen (oder wieder zuklappen) und die geänderten Dateien lesen */
-async function selectCommit($: EngineInterface, root: string, hash: string, t: Texts): Promise<void> {
+/**
+ * Klick auf eine Zeile: Details aufklappen (oder wieder zuklappen) und die geänderten Dateien lesen.
+ * `row` = welche Zeile der Drei-Ebenen-Ansicht (eventKey); im Gleisplan null.
+ */
+async function selectCommit(
+  $: EngineInterface,
+  root: string,
+  hash: string,
+  t: Texts,
+  row: string | null = null,
+): Promise<void> {
   const cur = await read($, selected)
-  if (cur?.hash === hash) {
+  if (cur?.hash === hash && (cur.row ?? null) === row) {
     await update($, selected, () => null)
     return
   }
   await update($, draft, () => '')
-  await update($, selected, () => ({ hash, files: [], summary: '', loading: true, subject: '', author: '', time: 0 }))
+  // Gleicher Speicherstand, nur eine andere Zeile: Die Dateien sind schon gelesen, die Karte wandert
+  if (cur?.hash === hash) {
+    await update($, selected, now => (now && now.hash === hash ? { ...now, row } : now))
+    return
+  }
+  await update($, selected, () => ({ hash, row, files: [], summary: '', loading: true, subject: '', author: '', time: 0 }))
   const shown = await $.process
     .run(
       [...GIT, 'show', '--stat=200,160', '--format=%s%x1f%an%x1f%ct%x1e', '--diff-merges=first-parent', hash],
@@ -565,7 +589,7 @@ async function selectCommit($: EngineInterface, root: string, hash: string, t: T
   const { files, summary } = parseStat(cut >= 0 ? out.slice(cut + 1) : out, t)
   await update($, selected, now =>
     now && now.hash === hash
-      ? { hash, files, summary, loading: false, subject: subject.trim(), author, time: Number(ct) || 0 }
+      ? { ...now, files, summary, loading: false, subject: subject.trim(), author, time: Number(ct) || 0 }
       : now,
   )
 }
@@ -1072,7 +1096,17 @@ export const register: Register = (on, options) => {
           toPull.push(`${tr.branch}: ${tr.behind}`)
         }
       }
-      const drawing = ebenenSlices(model, { status, selected: sel?.hash ?? null, mainBranch: snap.mainBranch, t })
+      // Die angeklickte Zeile; ohne passende Zeile (im Gleisplan gewählt, oder die Zeile ist
+      // inzwischen verschwunden) die erste mit diesem Speicherstand
+      const isEvent = (r: EbenenRow): r is Extract<EbenenRow, { kind: 'event' }> => r.kind === 'event'
+      let selRow = sel?.row ? model.rows.findIndex(r => isEvent(r) && eventKey(r.ev) === sel.row) : -1
+      if (selRow < 0 && sel) selRow = model.rows.findIndex(r => isEvent(r) && r.ev.hash === sel.hash)
+      const drawing = ebenenSlices(model, {
+        status,
+        selectedRow: selRow >= 0 ? selRow : null,
+        mainBranch: snap.mainBranch,
+        t,
+      })
       const textCols = Math.max(20, e.props.bodyColumns - Math.ceil(drawing.width / 7.5) - SYM - 3)
       const folderName = (i: number | null) =>
         i === null
@@ -1112,7 +1146,6 @@ export const register: Register = (on, options) => {
           </Text>
         </Box>,
       ]
-      let cardShown = false
       model.rows.forEach((row, i) => {
         const sl = drawing.rows[i]!
         const slice = <Svg source={sl.svg} width={drawing.width} height={sl.height} alt={t.modeLevels} />
@@ -1184,7 +1217,7 @@ export const register: Register = (on, options) => {
             {slice}
             {symbols(`zeichen-e${i}`, marks)}
             <Box flexDirection="column">
-              <Button key={`ereignis-${i}`} plain onPress={() => void selectCommit($, root, ev.hash, t)}>
+              <Button key={`ereignis-${i}`} plain onPress={() => void selectCommit($, root, ev.hash, t, eventKey(ev))}>
                 {shorten(title, textCols)}
               </Button>
               <Text dimColor size="caption" wrap="truncate-end">
@@ -1193,8 +1226,7 @@ export const register: Register = (on, options) => {
             </Box>
           </Box>,
         )
-        if (!cardShown && sel?.hash === ev.hash) {
-          cardShown = true
+        if (sel && i === selRow) {
           const known = snap.commits.find(c => c.hash === ev.hash)
           out.push(
             card(

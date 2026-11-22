@@ -113,6 +113,14 @@ export type DiaryEvent = {
   pushed: string | null
 }
 
+/**
+ * Kennung einer Zeile, die auch nach dem nächsten Einlesen gleich bleibt. Der Speicherstand
+ * allein reicht nicht: Abzweigen, Umschalten, Abholen usw. zeigen oft auf denselben.
+ */
+export function eventKey(ev: DiaryEvent): string {
+  return [ev.kind, ev.time, ev.hash, ev.branch ?? '', ev.remote ?? '', ev.folder ?? ''].join('|')
+}
+
 const isHash = (s: string) => /^[0-9a-f]{7,40}$/.test(s)
 const WORK = new Set<EventKind>(['commit', 'amend', 'merge', 'pull'])
 
@@ -470,7 +478,8 @@ export type EbenenDrawing = { width: number; header: EbenenSlice; rows: EbenenSl
 export type DrawOptions = {
   /** Zeichen am oberen Ende einer Spur: work (Ordner), push (PC), pull (GitHub) */
   status: Map<string, IconKind>
-  selected: string | null
+  /** Angeklickte Zeile (Index in model.rows): bekommt den Kreis */
+  selectedRow: number | null
   mainBranch: string | null
   t: Texts
 }
@@ -664,7 +673,7 @@ export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawin
         if (xb !== undefined) over += dot(xb, yc, GREY)
         break
     }
-    if (opt.selected && ev.hash === opt.selected) {
+    if (r === opt.selectedRow) {
       const sx = xb ?? xr ?? xf
       if (sx !== undefined) over += `<circle cx="${sx}" cy="${yc}" r="8.5" fill="none" stroke="${GREY}" stroke-width="1.5"/>`
     }

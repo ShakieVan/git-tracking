@@ -254,6 +254,45 @@ test('Drei Ebenen (voreingestellt) zeigt GitHub, PC und Ordner mit den Ereigniss
   await ui.unmount()
 })
 
+test('Drei Ebenen: Mehrere Zeilen mit demselben Speicherstand – die Karte klappt unter der angeklickten auf', { options: { language: 'de' } }, async ($, on) => {
+  mock.clock(on)
+  on('command.register', () => ({ value: { command: 'git-tracking' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [] }))
+  on('session.cwd', () => ({ value: 'C:/Projekte/Demo' }))
+  on('session.surfaces', () => ({ value: ['desktop'] }))
+  on('process.run', (_, e) => ({ value: answerGit(e.argv) }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.run', () => ({ text: '' }))
+
+  await $.session.start({ cwd: 'C:/Projekte/Demo', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'git-tracking', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const buttons = async () => (await ui.findAll({ type: 'Button' })).map(b => ({ key: String(b.key), text: b.text }))
+  let list = await buttons()
+  for (let i = 0; i < 20 && !list.some(b => b.text === 'Neuer Zweig feature'); i++) list = await buttons()
+  // „Ordner angelegt: x“, „Neuer Zweig feature“ und „Erster Speicherstand“ zeigen alle auf c1
+  const rowsOnC1 = ['Ordner angelegt: x', 'Neuer Zweig feature', 'Erster Speicherstand'].map(text => list.find(b => b.text === text)?.key)
+  for (const key of rowsOnC1) expect(key).toMatch(/^ereignis-\d+$/)
+
+  // Die Karte steht direkt unter der angeklickten Zeile (der Knopf davor ist deren Titel)
+  const cardBelow = async () => {
+    const now = await buttons()
+    const at = now.findIndex(b => b.key === 'frage-hier')
+    return at > 0 ? now[at - 1]!.key : null
+  }
+  for (const key of [rowsOnC1[1]!, rowsOnC1[2]!, rowsOnC1[0]!]) {
+    await ui.press({ key })
+    expect(await cardBelow()).toBe(key)
+    expect((await ui.findAll({ type: 'Button', text: 'Im Chat fragen' })).length).toBe(1)
+  }
+  // Nochmal dieselbe Zeile: zuklappen
+  await ui.press({ key: rowsOnC1[0]! })
+  expect(await cardBelow()).toBeNull()
+  await ui.unmount()
+})
+
 test('English: the three levels speak English, and DE switches to German', { options: { language: 'en' } }, async ($, on) => {
   mock.clock(on)
   on('command.register', () => ({ value: { command: 'git-tracking' } }))
