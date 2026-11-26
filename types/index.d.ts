@@ -64,6 +64,8 @@ export type GleisSnapshot = {
   otherRepoBranches: Record<string, string>
   /** GitHub-Ablage je Gegenstelle, z. B. { origin: 'meine-sachen', oeffentlich: 'git-tracking' } */
   remoteNames: Record<string, string>
+  /** owner/repo je Gegenstelle, die zu GitHub zeigt (für Links), z. B. { origin: 'Tester/meine-sachen' } */
+  remoteRepos: Record<string, string>
   /** Speicherstände, die nur auf diesem PC liegen (noch nicht hochgeladen), höchstens 500 */
   unpushed: string[]
   /** Speicherstände, die nur bei GitHub liegen (noch nicht abgeholt), höchstens 500 */
@@ -197,6 +199,8 @@ export type ProjectRepo = {
   source: 'git' | 'name' | 'claude'
   /** Kurze Begründung (von Claude) oder die Beschreibung bei GitHub */
   why: string
+  /** Privat oder öffentlich, wenn die Liste des Besitzers bei GitHub es verrät; fehlt = unbekannt */
+  isPrivate?: boolean
 }
 
 /** release = fertige Version, beta = Vorabversion oder aus einer Beta-Ablage, draft = Entwurf (nie veröffentlicht) */
@@ -251,6 +255,8 @@ declare module 'claude-code' {
       lang: Shaped<'de' | 'en'>
       /** Veröffentlichungen und Betas des gezeigten Projekts */
       releases: Shaped<GleisReleaseState>
+      /** Infobox „Spuren“ in den Drei Ebenen aufgeklappt */
+      lanesInfo: Shaped<boolean>
     }
   }
 }

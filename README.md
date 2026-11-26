@@ -17,6 +17,8 @@ A Claude Code plugin that shows the Git state of the current project in a side p
 - Merges on GitHub (pull request on the website) or on another PC get their own blue row (“Merged on GitHub → main” or “Merged elsewhere → main”), read from the merge commits once they have been fetched. A merge on the website is recognised by its committer (GitHub), even if its message was changed
 - Deleted branches share one grey lane “deleted” in the PC column instead of a lane each. A deleted branch that was merged bends into its target there; its row says where its commits came from – “committed from a deleted folder” when none of them is in the log of a folder that still exists (each folder logs its own commits), otherwise “(deleted)”. ✕ = branch deleted without being merged (work may be lost) · grey stub = discarded (reset, amended, rebased)
 - The top row (“Now”) marks what is still open: a wrench (work in progress, not committed), a closed envelope (committed, not pushed) and two circular arrows (newer state on GitHub, pull)
+- Long lane names are shortened; when two would look the same (“MyApp-Relea…”), the longer one shows the part that differs (“…Windows-Dev…”). Hover over a lane name to see its full name and a few facts (desktop app); the column titles explain themselves the same way
+- **ⓘ Lanes** next to the header opens a box with every lane, grouped by level: full name, what it is (branch of which repository, private or public), what is open, when it was last pushed or fetched, the newest release – with links to GitHub (branch, compare with main for unmerged branches, releases), **Copy address**, and for folders the full path with **Open in Explorer** and **Copy path**
 
 **Track plan**: the branches and commits as a metro map – main branch in blue on the left, other branches in their own colours, buffer stops for branches not merged yet, rings showing whether a commit is only here, only on GitHub, or both.
 
@@ -24,8 +26,8 @@ Click any row to see the changed files and ask Claude about that commit – in t
 
 Which repositories belong to the project (shown below the three levels):
 
-- Without asking anyone, the pane guesses: the project’s GitHub remotes, plus repositories of the same owner with a matching name (`Name-Beta`, or `Name` for a `Name-Development` repository).
-- **Update project** asks Claude in the background, only when pressed: Git-Tracking searches the project’s committed files for mentions of the owner’s repositories (`git grep`, read-only) and hands those lines, the remotes and the guessed names to a small model (Haiku). Its answer – each repository with its role and a short reason – replaces the guess and is remembered per project. Nothing appears in the chat. If a matching repository shows up on GitHub later, the pane says so and you decide when to update.
+- Without asking anyone, the pane guesses: the project’s GitHub remotes, plus repositories of the same owner with a matching name (`Name-Beta`, or `Name` for a `Name-Development` repository). Left out are repositories of other projects: the `origin` of another Git folder next to the project (read from its `.git/config`), and a development repository with another base name (`Name-Windows-Development` is not part of `Name-Development`).
+- **Update project** asks Claude in the background, only when pressed: Git-Tracking searches the project’s committed files for mentions of the owner’s repositories (`git grep`, read-only) and hands those lines, the remotes, the guessed names and the repositories of other projects to a small model (Haiku). Its answer – each repository with its role and a short reason – replaces the guess and is remembered per project; repositories of other projects are left out of it too. Nothing appears in the chat. If a matching repository shows up on GitHub later, the pane says so and you decide when to update.
 
 The releases are read with `gh` when it is installed (private repositories included), otherwise from GitHub’s public API (public repositories only), when the three levels are shown and the last read is older than 15 minutes, or with **Reload**.
 
@@ -52,7 +54,8 @@ The question box on a commit card is different: it writes your question into the
 
 ## What it runs and sends
 
-- Programs: `git` (read-only), Windows PowerShell for the system language and the folder dialog, and `gh` for the releases when it is installed.
+- Programs: `git` (read-only), Windows PowerShell for the system language and the folder dialog, `gh` for the releases when it is installed, and – only when you press **Open in Explorer** – the system’s file manager (`explorer.exe`, `open` or `xdg-open`).
+- Files: besides Git, the pane reads the `.git/config` of the folders next to the project (only their `origin`), to tell which repositories belong to other projects.
 - Network: only for the releases in the three levels, at most every 15 minutes while the pane shows them – `gh`, or GitHub’s public API at `api.github.com` without sign-in, with the repository names of the project.
 - Claude: only when **Update project** is pressed – the lines found in the project’s files, the remotes and the guessed repository names go to a small model (Haiku) through your own Claude Code account; this counts towards your usage like any other request.
 
@@ -109,6 +112,8 @@ Eine Erweiterung für Claude Code. Sie zeigt in jedem Projekt in einem Seitenfen
 - Zusammenführen bei GitHub (Änderungsvorschlag auf der Webseite) oder auf einem anderen Rechner bekommt eine eigene blaue Zeile („Bei GitHub zusammengeführt → main“ bzw. „Woanders zusammengeführt → main“), erkannt an den Speicherständen, sobald sie abgeholt sind. Zusammenführen auf der Webseite erkennt die Ansicht am Ersteller (GitHub), auch wenn der Text dabei geändert wurde
 - Gelöschte Zweige teilen sich in der Spalte PC eine graue Spur „gelöscht“ statt je einer eigenen. Ein gelöschter Zweig, der übernommen wurde, biegt dort in sein Ziel ein; seine Zeile sagt, woher die Speicherstände kamen – „festgehalten aus gelöschtem Ordner“, wenn keiner davon im Tagebuch eines noch bestehenden Ordners steht (jeder Ordner führt das Festhalten in seinem eigenen Tagebuch), sonst „(aufgeräumt)“. ✕ = Zweig gelöscht, ohne übernommen zu sein (Arbeit evtl. verloren) · grauer Stummel = verworfen (zurückgesetzt, nachträglich geändert, umgeschrieben)
 - Oberste Zeile („Jetzt“): Schraubenschlüssel = in Arbeit, noch nicht festgehalten · geschlossener Briefumschlag = festgehalten, noch nicht hochgeladen · zwei Halbkreis-Pfeile = neuerer Stand bei GitHub, abholen
+- Lange Spurnamen werden gekürzt; sähen zwei gleich aus („Spiel-Relea…“), zeigt der längere den Teil, der sich unterscheidet („…Windows-Dev…“). Fährt die Maus über einen Spurnamen, erscheinen der volle Name und ein paar Angaben (Desktop-App); die Spaltentitel erklären sich genauso
+- **ⓘ Spuren** neben dem Kopf öffnet eine Infobox mit jeder Spur, nach Ebenen geordnet: voller Name, was es ist (Zweig welcher Ablage, privat oder öffentlich), was offen ist, wann zuletzt hochgeladen oder abgeholt, die neueste Veröffentlichung – mit Links zu GitHub (Zweig, Unterschied zu main bei noch nicht zusammengeführten Zweigen, Veröffentlichungen), **Adresse kopieren**, und bei Ordnern der volle Pfad mit **Im Explorer öffnen** und **Pfad kopieren**
 
 **Gleisplan**: Zweige und Speicherstände als S-Bahn-Plan – Hauptzweig blau links, jeder Entwicklungszweig in seiner Farbe, Prellbock = noch nicht zusammengeführt, Ringe zeigen, ob ein Speicherstand nur hier, nur bei GitHub oder an beiden Orten liegt. Fährt die Maus über ein Zeichen, erscheint die Erklärung.
 
@@ -116,8 +121,8 @@ Ein Klick auf eine Zeile zeigt die geänderten Dateien; dort lässt sich eine Fr
 
 Welche Ablagen zum Projekt gehören (steht unter den drei Ebenen):
 
-- Ohne jemanden zu fragen, vermutet das Fenster: die GitHub-Ablagen, in die das Projekt hochlädt, dazu Ablagen desselben Besitzers mit passendem Namen (`Name-Beta`, oder `Name` zu einer Ablage `Name-Development`).
-- **Projekt aktualisieren** fragt Claude im Hintergrund, nur auf Knopfdruck: Git-Tracking durchsucht die festgehaltenen Dateien des Projekts nach Nennungen von Ablagen des Besitzers (`git grep`, nur lesend) und gibt diese Zeilen, die Gegenstellen und die vermuteten Namen einem kleinen Modell (Haiku). Seine Antwort – jede Ablage mit ihrer Rolle und einer kurzen Begründung – ersetzt die Vermutung und wird je Projekt gemerkt. Im Chat erscheint nichts. Taucht bei GitHub später eine passende Ablage auf, sagt das Fenster es, und du entscheidest, wann du aktualisierst.
+- Ohne jemanden zu fragen, vermutet das Fenster: die GitHub-Ablagen, in die das Projekt hochlädt, dazu Ablagen desselben Besitzers mit passendem Namen (`Name-Beta`, oder `Name` zu einer Ablage `Name-Development`). Ausgelassen werden Ablagen anderer Projekte: die `origin` eines anderen Git-Ordners neben dem Projekt (gelesen aus dessen `.git/config`) und eine Entwicklungsablage mit anderem Grundnamen (`Name-Windows-Development` gehört nicht zu `Name-Development`).
+- **Projekt aktualisieren** fragt Claude im Hintergrund, nur auf Knopfdruck: Git-Tracking durchsucht die festgehaltenen Dateien des Projekts nach Nennungen von Ablagen des Besitzers (`git grep`, nur lesend) und gibt diese Zeilen, die Gegenstellen, die vermuteten Namen und die Ablagen anderer Projekte einem kleinen Modell (Haiku). Seine Antwort – jede Ablage mit ihrer Rolle und einer kurzen Begründung – ersetzt die Vermutung und wird je Projekt gemerkt; Ablagen anderer Projekte fallen auch daraus heraus. Im Chat erscheint nichts. Taucht bei GitHub später eine passende Ablage auf, sagt das Fenster es, und du entscheidest, wann du aktualisierst.
 
 Die Veröffentlichungen liest das Fenster mit `gh`, wenn es installiert ist (auch private Ablagen), sonst über die öffentliche GitHub-Schnittstelle (nur öffentliche Ablagen) – wenn die drei Ebenen gezeigt werden und der letzte Stand älter als 15 Minuten ist, oder mit **Neu laden**.
 
@@ -144,7 +149,8 @@ Das Fragefeld an einem Speicherstand arbeitet anders: Es schreibt deine Frage in
 
 ### Was die Erweiterung startet und sendet
 
-- Programme: `git` (nur lesend), Windows PowerShell für die Systemsprache und den Ordnerdialog, und `gh` für die Veröffentlichungen, wenn es installiert ist.
+- Programme: `git` (nur lesend), Windows PowerShell für die Systemsprache und den Ordnerdialog, `gh` für die Veröffentlichungen, wenn es installiert ist, und – nur beim Knopf **Im Explorer öffnen** – den Dateimanager des Systems (`explorer.exe`, `open` oder `xdg-open`).
+- Dateien: Außer über Git liest das Fenster die `.git/config` der Ordner neben dem Projekt (nur deren `origin`), um zu erkennen, welche Ablagen zu anderen Projekten gehören.
 - Netz: nur für die Veröffentlichungen in den drei Ebenen, höchstens alle 15 Minuten, solange das Fenster sie zeigt – `gh` oder die öffentliche GitHub-Schnittstelle `api.github.com` ohne Anmeldung, mit den Ablagennamen des Projekts.
 - Claude: nur beim Knopf **Projekt aktualisieren** – die gefundenen Zeilen aus den Projektdateien, die Gegenstellen und die vermuteten Ablagennamen gehen über dein eigenes Claude-Code-Konto an ein kleines Modell (Haiku); das zählt wie jede andere Anfrage zu deinem Verbrauch.
 

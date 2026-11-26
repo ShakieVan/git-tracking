@@ -16,10 +16,14 @@ import type {
   ReleaseItem,
 } from '../types'
 import {
+  baseOf,
   branchesForOtherRepos,
   checkPrompt,
+  dropOtherProjects,
+  foreignOrigins,
   grepPattern,
   guessRepos,
+  otherProjectRepos,
   parseApiReleases,
   parseApiRepoList,
   parseCheckAnswer,
@@ -27,9 +31,11 @@ import {
   parseGhRepoList,
   parseRemotes,
   pickEvidence,
+  remoteGithubRepos,
   remoteRepoNames,
   sameRepo,
   withRemotes,
+  withVisibility,
 } from './ablagen'
 import type { OwnerRepo, Remote } from './ablagen'
 import {
@@ -61,6 +67,7 @@ import {
 } from './graph'
 import type { IconKind, RowEvent } from './graph'
 import {
+  COL_GH,
   COL_ORD,
   COL_PC,
   COL_REL,
@@ -82,6 +89,8 @@ import type { Lang, Texts } from './i18n'
 import { briefText, readBrief } from './kurzfassung'
 import type { BriefMode, BriefNewest, BriefRun } from './kurzfassung'
 import { pickedFolder, pickerCommand } from './ordnerwahl'
+import { spurInfos, spurTips } from './spuren'
+import type { SpurInfo } from './spuren'
 
 const PANE = 'git-tracking'
 const TITLE = 'Git-Tracking'
@@ -102,7 +111,8 @@ async function readTitle($: EngineInterface): Promise<string> {
 const GIT = ['git', '--no-optional-locks', '-c', 'core.quotepath=off', '-c', 'color.ui=never']
 
 // Neues Schild (shape), wenn sich der Aufbau eines gespeicherten Werts ändert.
-const snapshot = atom({ plugin: 'git-tracking', key: 'snapshot' } as const, null, { shape: 'snapshot-5' })
+// snapshot-6: neu remoteRepos (owner/repo je Gegenstelle, für Links)
+const snapshot = atom({ plugin: 'git-tracking', key: 'snapshot' } as const, null, { shape: 'snapshot-6' })
 const view = atom(
   { plugin: 'git-tracking', key: 'view' } as const,
   // Voreingestellt: Drei Ebenen; der Gleisplan bleibt per Umschalter erreichbar
@@ -112,6 +122,8 @@ const view = atom(
 )
 const selected = atom({ plugin: 'git-tracking', key: 'selected' } as const, null, { shape: 'selected-3' })
 const draft = atom({ plugin: 'git-tracking', key: 'draft' } as const, '', { shape: 'draft-1' })
+/** Infobox „Spuren“ in den Drei Ebenen aufgeklappt */
+const lanesInfo = atom({ plugin: 'git-tracking', key: 'lanesInfo' } as const, false, { shape: 'lanes-info-1' })
 /** Sprache der Anzeige: de oder en */
 const lang = atom({ plugin: 'git-tracking', key: 'lang' } as const, 'en', { shape: 'lang-1' })
 /** Unter diesem Schlüssel merkt sich das Plugin die im Fenster gewählte Sprache */
@@ -145,6 +157,7 @@ function emptySnapshot(folder: string, error: string | null): GleisSnapshot {
     unmerged: [],
     otherRepoBranches: {},
     remoteNames: {},
+    remoteRepos: {},
     unpushed: [],
     unpulled: [],
     commits: [],
@@ -359,6 +372,7 @@ async function readGit($: EngineInterface): Promise<GleisSnapshot> {
   const remoteRefs = refNames.filter(r => r.startsWith('refs/remotes/')).map(r => r.slice(13))
   const mainBranch = pickMainBranch(branches, remoteRefs, st.branch)
   const remoteNames = remotesV.exitCode === 0 ? remoteRepoNames(remotesV.stdout) : {}
+  const remoteRepos = remotesV.exitCode === 0 ? remoteGithubRepos(remotesV.stdout) : {}
   const otherRepoBranches = branchesForOtherRepos(refRows, mainBranch, remoteNames)
   let unmerged: string[] = []
   if (mainBranch) {
@@ -393,6 +407,7 @@ async function readGit($: EngineInterface): Promise<GleisSnapshot> {
     unmerged,
     otherRepoBranches,
     remoteNames,
+    remoteRepos,
     // Ohne GitHub-Ablage liegt alles nur hier; das sagt schon der Kopf, also keine Markierung je Speicherstand
     unpushed: remoteList.length > 0 && ahead.exitCode === 0 ? lines(ahead.stdout) : [],
     unpulled: behind.exitCode === 0 ? lines(behind.stdout) : [],
@@ -733,17 +748,45 @@ async function evidence($: EngineInterface, root: string, owner: string): Promis
   return r && r.exitCode === 0 ? pickEvidence(r.stdout) : []
 }
 
+/** origins der Git-Ordner neben dem Projekt, je übergeordnetem Ordner 15 Minuten gemerkt */
+const neighbourCache = new Map<string, { at: number; configs: string[] }>()
+/** Höchstens so viele Nachbarordner werden angesehen */
+const MAX_NEIGHBOURS = 300
+
+/**
+ * Welche Ablagen die Quellcode-Ablage eines anderen Projekts sind: die origin jedes Git-Ordners
+ * neben dem Projekt, gelesen aus dessen `.git/config` (ohne Git zu starten, nur lesend).
+ */
+async function neighbourOrigins($: EngineInterface, root: string, mainName: string, now: number, fresh: boolean): Promise<string[]> {
+  const norm = root.replace(/\\/g, '/').replace(/\/+$/, '')
+  let parent = norm.slice(0, norm.lastIndexOf('/'))
+  if (!parent) return []
+  // Laufwerk ohne Ordner (E:): das Wurzelverzeichnis meinen, nicht den aktuellen Ordner des Laufwerks
+  if (/^[A-Za-z]:$/.test(parent)) parent = `${parent}/.`
+  const own = baseName(norm).toLowerCase()
+  let c = neighbourCache.get(parent.toLowerCase())
+  if (!c || fresh || now - c.at >= RELEASES_FRESH_MS) {
+    const entries = await $.fs.list(parent).catch(() => [])
+    const dirs = entries.filter(d => d.kind === 'dir' && d.name.toLowerCase() !== own && !d.name.startsWith('.')).slice(0, MAX_NEIGHBOURS)
+    const configs = await Promise.all(dirs.map(d => $.fs.read(`${parent}/${d.name}/.git/config`).catch(() => null)))
+    c = { at: now, configs: configs.filter((x): x is string => typeof x === 'string') }
+    neighbourCache.set(parent.toLowerCase(), c)
+  }
+  return foreignOrigins(c.configs, mainName)
+}
+
 /** Fragt Claude (kleines Modell, im Hintergrund, nichts im Chat), welche Ablagen dazugehören */
 async function askClaude(
   $: EngineInterface,
   root: string,
   remotes: Remote[],
   candidates: ProjectRepo[],
+  otherProjects: string[],
   t: Texts,
 ): Promise<{ repos: ProjectRepo[] } | { error: string }> {
   const owner = remotes[0]!.name.split('/')[0]!
   const lines = await evidence($, root, owner)
-  const { system, prompt } = checkPrompt({ project: baseName(root), remotes, candidates, evidence: lines, lang: t.lang })
+  const { system, prompt } = checkPrompt({ project: baseName(root), remotes, candidates, evidence: lines, otherProjects, lang: t.lang })
   let r: Awaited<ReturnType<EngineInterface['model']['complete']>>
   try {
     r = await $.model.complete({ model: 'haiku', system, prompt, maxTokens: 1500, timeoutMs: 90_000 })
@@ -816,21 +859,26 @@ async function readReleases($: EngineInterface, opt: { force?: boolean; check?: 
     error: null,
   }))
 
-  const owned = await ownerRepos($, key.split('/')[0]!, now, !!opt.force)
-  const guess = guessRepos(remotes, owned)
+  const [owned, foreign] = await Promise.all([
+    ownerRepos($, key.split('/')[0]!, now, !!opt.force),
+    neighbourOrigins($, root, key, now, !!opt.force),
+  ])
+  const guess = guessRepos(remotes, owned, foreign)
   let stored: Checked | null = (await checkedAll($))[key.toLowerCase()] ?? null
   let error: string | null = null
   if (opt.check) {
-    const res = await askClaude($, root, remotes, guess, t)
+    const res = await askClaude($, root, remotes, guess, otherProjectRepos(remotes, owned, foreign), t)
     if ('repos' in res) {
-      stored = { repos: withRemotes(res.repos, remotes), seen: guess.map(g => g.name), at: now }
+      stored = { repos: dropOtherProjects(withRemotes(res.repos, remotes), remotes, foreign), seen: guess.map(g => g.name), at: now }
       await saveChecked($, key, stored)
     } else {
       error = res.error
     }
     await update($, releases, (s): GleisReleaseState => ({ ...s, busy: 'loading' }))
   }
-  const repos = stored ? withRemotes(stored.repos, remotes) : guess
+  // Auch eine früher gemerkte Liste kann Ablagen anderer Projekte enthalten: beim Lesen herausfiltern
+  const owner = key.split('/')[0]!
+  const repos = withVisibility(stored ? dropOtherProjects(withRemotes(stored.repos, remotes), remotes, foreign) : guess, owner, owned)
   const known = (n: string) => repos.some(r => sameRepo(r.name, n)) || (stored?.seen ?? []).some(s => sameRepo(s, n))
   const newRepos = stored ? guess.filter(g => !known(g.name)).map(g => g.name) : []
 
@@ -988,6 +1036,30 @@ async function askHere($: EngineInterface, root: string, c: GleisCommit, questio
     $.ui.toast(question.trim() ? t.toastAsked : t.toastAskStart)
   } else {
     $.ui.toast(t.toastNoFill(filled?.refusal === 'dialog'))
+  }
+}
+
+/** Farben der Ebenen in der Infobox „Spuren“, wie in der Zeichnung: GitHub, PC, Ordner, Veröffentlicht */
+const LEVEL_COLORS = [COL_GH, COL_PC, COL_ORD, COL_REL] as const
+const INFO_GREY = '#8b949e'
+
+type CopySurface = Parameters<EngineInterface['ui']['copy']>[0]['surface']
+
+/** Kopiert eine Adresse oder einen Pfad und sagt es kurz (nur, wenn die Oberfläche es übernommen hat) */
+async function copyText($: EngineInterface, text: string, surface: CopySurface, toast: string): Promise<void> {
+  const r = await $.ui.copy({ text, surface }).catch(() => null)
+  if (r?.isCopied) $.ui.toast(toast)
+}
+
+/** Öffnet einen Ordner im Dateimanager des Systems (Windows: Explorer) */
+async function openFolderAt($: EngineInterface, path: string, t: Texts): Promise<void> {
+  const p = (await $.session.info().catch(() => null))?.platform
+  const argv = p === 'windows' ? ['explorer.exe', path.replace(/\//g, '\\')] : p === 'macos' ? ['open', path] : ['xdg-open', path]
+  try {
+    // explorer.exe meldet auch bei Erfolg den Rückgabewert 1: nur ein Startfehler ist ein Fehler
+    await $.process.run(argv, { timeoutMs: 15_000 })
+  } catch (err) {
+    $.ui.toast(t.info.openFailed(firstLine(String(err)) || '?'))
   }
 }
 
@@ -1490,12 +1562,30 @@ export const register: Register = (on, options) => {
       const isEvent = (r: EbenenRow): r is Extract<EbenenRow, { kind: 'event' }> => r.kind === 'event'
       let selRow = sel?.row ? model.rows.findIndex(r => isEvent(r) && eventKey(r.ev) === sel.row) : -1
       if (selRow < 0 && sel) selRow = model.rows.findIndex(r => isEvent(r) && r.ev.hash === sel.hash)
+      // Angaben zu jeder Spur: Hinweis beim Darüberfahren über den Namen und Infobox „Spuren“
+      const infos = spurInfos({
+        lanes: model.lanes,
+        diary,
+        mainBranch: snap.mainBranch,
+        unmerged: snap.unmerged,
+        otherRepoBranches: snap.otherRepoBranches,
+        remoteRepos: snap.remoteRepos ?? {},
+        commits: snap.commits,
+        unpushed: snap.unpushed,
+        hasRemotes: snap.remotes.length > 0,
+        repos: relData?.repos ?? [],
+        releases: relData?.items ?? [],
+        now,
+        t,
+      })
       const drawing = ebenenSlices(model, {
         status,
         selectedRow: selRow >= 0 ? selRow : null,
         mainBranch: snap.mainBranch,
         t,
+        tips: spurTips(infos, t),
       })
+      const projectBase = relData ? baseOf(relData.key.slice(relData.key.indexOf('/') + 1)) : null
       const textCols = Math.max(20, e.props.bodyColumns - Math.ceil(drawing.width / 7.5) - SYM - 3)
       const folderName = (i: number | null) =>
         i === null
@@ -1528,15 +1618,109 @@ export const register: Register = (on, options) => {
               .filter(Boolean)
               .join(' · ')
 
+      const infoOpen = await read($, lanesInfo)
+      const platform = infoOpen ? (await $.session.info().catch(() => null))?.platform : undefined
+      const LinkEl = 'Link' in ui ? ui.Link : null
+      // Infobox „Spuren“: jede gezeichnete Spur mit vollem Namen, Stand, Links und Knöpfen, nach Ebenen
+      const lanesBox = (list: SpurInfo[]) => (
+        <Box key="spuren-box" flexDirection="column" borderStyle="round" paddingX={1} marginY={1}>
+          <Text weight="semibold">{t.info.title}</Text>
+          {([3, 0, 1, 2] as const)
+            .filter(c => list.some(x => x.col === c))
+            .map(c => (
+              <Box key={`spuren-ebene-${c}`} flexDirection="column" marginTop={1}>
+                <Text color={LEVEL_COLORS[c]} weight="semibold" size="caption">
+                  {t.levelTitles[c]}
+                </Text>
+                {list
+                  .filter(x => x.col === c)
+                  .map(x => (
+                    <Box key={`spur-${x.key}`} flexDirection="column">
+                      <Text wrap="wrap">
+                        <Text color={x.grey ? INFO_GREY : LEVEL_COLORS[c]}>{'● '}</Text>
+                        <Text weight="semibold">{x.name}</Text>
+                        <Text dimColor>{` · ${x.what}`}</Text>
+                      </Text>
+                      {x.facts.length > 0 && (
+                        <Box paddingLeft={2}>
+                          <Text dimColor size="caption" wrap="wrap">
+                            {x.facts.join(' · ')}
+                          </Text>
+                        </Box>
+                      )}
+                      {x.path && (
+                        <Box paddingLeft={2}>
+                          <Text dimColor size="caption" wrap="wrap">
+                            {x.path}
+                          </Text>
+                        </Box>
+                      )}
+                      {(x.links.length > 0 || x.path) && (
+                        <Box flexDirection="row" gap={1} flexWrap="wrap" paddingLeft={2}>
+                          {LinkEl &&
+                            x.links.map(l => (
+                              <Text size="caption">
+                                <LinkEl href={l.href}>{l.label}</LinkEl>
+                              </Text>
+                            ))}
+                          {x.links.length > 0 && (
+                            <Button
+                              key={`spur-adresse-${x.key}`}
+                              plain
+                              dimColor
+                              label={t.info.copyUrl}
+                              onPress={press => void copyText($, x.links[0]!.href, press.surface, t.info.urlCopied)}
+                            />
+                          )}
+                          {x.path && (
+                            <Button
+                              key={`spur-oeffnen-${x.key}`}
+                              plain
+                              dimColor
+                              label={platform === 'windows' ? t.info.explorer : t.info.openFolder}
+                              onPress={() => void openFolderAt($, x.path!, t)}
+                            />
+                          )}
+                          {x.path && (
+                            <Button
+                              key={`spur-pfad-${x.key}`}
+                              plain
+                              dimColor
+                              label={t.info.copyPath}
+                              onPress={press => void copyText($, x.path!, press.surface, t.info.pathCopied)}
+                            />
+                          )}
+                        </Box>
+                      )}
+                    </Box>
+                  ))}
+              </Box>
+            ))}
+          <Box marginTop={1}>
+            <Button key="spuren-schliessen" label={t.close} onPress={() => void update($, lanesInfo, () => false)} />
+          </Box>
+        </Box>
+      )
       const out: ReturnType<typeof Box>[] = [
         <Box key="ebenen-kopf" flexDirection="row" alignItems="flex-end">
-          <Svg source={drawing.header.svg} width={drawing.width} height={drawing.header.height} alt={t.levelTitles.join(' · ')} />
+          {/* Bedienbar gezeichnet, damit die Hinweise auf Spurnamen und Spaltentiteln beim Darüberfahren erscheinen */}
+          <Svg
+            source={drawing.header.svg}
+            width={drawing.width}
+            height={drawing.header.height}
+            alt={t.levelTitles.join(' · ')}
+            isInteractive
+          />
           <Box width={SYM} />
-          <Text dimColor size="caption" wrap="wrap">
-            {t.diaryLine}
-          </Text>
+          <Box flexDirection="column" flexShrink={1} gap={1}>
+            <Text dimColor size="caption" wrap="wrap">
+              {t.diaryLine}
+            </Text>
+            <Button key="spuren" plain dimColor={!infoOpen} label={t.info.button} onPress={() => void update($, lanesInfo, x => !x)} />
+          </Box>
         </Box>,
       ]
+      if (infoOpen) out.push(lanesBox(infos))
       model.rows.forEach((row, i) => {
         const sl = drawing.rows[i]!
         const slice = <Svg source={sl.svg} width={drawing.width} height={sl.height} alt={t.modeLevels} />
@@ -1597,7 +1781,7 @@ export const register: Register = (on, options) => {
           return
         }
         const ev: DiaryEvent = row.ev
-        const { title, detail } = eventLines(ev, folderName, snap.mainBranch, t, diary.remoteNames)
+        const { title, detail } = eventLines(ev, folderName, snap.mainBranch, t, diary.remoteNames, projectBase)
         const marks: RowEvent[] = []
         const about = detail ? `${title} – ${detail}` : title
         if (ev.kind === 'merge') marks.push({ icon: 'merge', color: ICON_GREY, text: about })

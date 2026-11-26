@@ -199,6 +199,170 @@ export type Texts = {
   brief: BriefTexts
   /** Veröffentlichungen und Betas (ablagen.ts) */
   rel: ReleaseTexts
+  /** Hinweise auf den Spurnamen und Infobox „Spuren“ (spuren.ts) */
+  info: InfoTexts
+}
+
+export type InfoTexts = {
+  /** Knopf neben dem Kopf, öffnet und schließt die Infobox */
+  button: string
+  title: string
+  /** Letzte Zeile des Hinweises auf einem Spurnamen */
+  tipHint: string
+  /** Hinweise auf den Spaltentiteln: GitHub, PC, Ordner, Veröffentlicht */
+  colTips: [string, string, string, string]
+  isPrivate: string
+  isPublic: string
+  remoteBranch: (branch: string, repo: string) => string
+  mainBranchGitHub: string
+  goneRemote: string
+  lastPushed: (when: string) => string
+  lastFetched: (when: string) => string
+  localCounterpart: (b: string) => string
+  branchMain: string
+  branchDev: string
+  upstream: (u: string) => string
+  forRepo: (repo: string) => string
+  neverPushed: string
+  localOnly: string
+  ahead: (n: number) => string
+  behind: (n: number) => string
+  inSync: string
+  merged: (main: string) => string
+  notMerged: (main: string) => string
+  inFolder: (f: string) => string
+  lastCommit: (subject: string, when: string) => string
+  deletedWhat: string
+  folderMain: string
+  folderExtra: string
+  onBranch: (b: string) => string
+  detached: string
+  dirty: (n: number) => string
+  clean: string
+  formerWhat: string
+  releasesCount: (n: number) => string
+  newest: (tag: string, beta: boolean, when: string) => string
+  openReleases: string
+  openRepo: string
+  openBranch: string
+  compare: (main: string) => string
+  copyUrl: string
+  copyPath: string
+  /** Unter Windows */
+  explorer: string
+  /** Andere Systeme */
+  openFolder: string
+  urlCopied: string
+  pathCopied: string
+  openFailed: (err: string) => string
+}
+
+const infoDe: InfoTexts = {
+  button: 'ⓘ Spuren',
+  title: 'Spuren dieses Projekts',
+  tipHint: 'Links und mehr: Knopf „ⓘ Spuren“',
+  colTips: [
+    'GitHub: die Zweige in den GitHub-Ablagen (Stand des letzten Abholens)',
+    'PC: die Entwicklungszweige auf diesem PC',
+    'Ordner: die Arbeitsverzeichnisse dieser Ablage und was dort gerade steht',
+    'Veröffentlicht: Veröffentlichungen und Betas in den GitHub-Ablagen des Projekts',
+  ],
+  isPrivate: 'privat',
+  isPublic: 'öffentlich',
+  remoteBranch: (b, repo) => `Zweig ${b} der Ablage ${repo}`,
+  mainBranchGitHub: 'Hauptzweig',
+  goneRemote: 'gibt es bei GitHub nicht mehr (Stand des letzten Abholens)',
+  lastPushed: w => `zuletzt von hier hochgeladen: ${w}`,
+  lastFetched: w => `zuletzt abgeholt: ${w}`,
+  localCounterpart: b => `Gegenstück hier: ${b}`,
+  branchMain: 'Hauptzweig auf diesem PC',
+  branchDev: 'Entwicklungszweig auf diesem PC',
+  upstream: u => `Gegenstück ${u}`,
+  forRepo: repo => `wird in die Ablage ${repo} hochgeladen`,
+  neverPushed: 'noch nie hochgeladen',
+  localOnly: 'nur auf diesem PC',
+  ahead: n => `${n} noch nicht hochgeladen`,
+  behind: n => `${n} noch nicht abgeholt`,
+  inSync: 'alles hochgeladen',
+  merged: m => `in ${m} zusammengeführt`,
+  notMerged: m => `noch nicht in ${m} zusammengeführt`,
+  inFolder: f => `steht im Ordner ${f}`,
+  lastCommit: (s, w) => `letzter Speicherstand „${s}“, ${w}`,
+  deletedWhat: 'Zweige, die es nicht mehr gibt',
+  folderMain: 'Hauptordner der Ablage',
+  folderExtra: 'zusätzliches Arbeitsverzeichnis',
+  onBranch: b => `steht auf ${b}`,
+  detached: 'ohne Zweig (direkt auf einem Speicherstand)',
+  dirty: n => `${n1(n, 'Datei', 'Dateien')} geändert, noch nicht festgehalten`,
+  clean: 'alles festgehalten',
+  formerWhat: 'Ordner, die es nicht mehr gibt – nur noch im Tagebuch',
+  releasesCount: n => n1(n, 'Veröffentlichung', 'Veröffentlichungen'),
+  newest: (tag, beta, w) => `neueste ${tag}${beta ? ' (Beta)' : ''}, ${w}`,
+  openReleases: 'Veröffentlichungen ansehen',
+  openRepo: 'Ablage auf GitHub',
+  openBranch: 'Auf GitHub öffnen',
+  compare: m => `Unterschied zu ${m} ansehen`,
+  copyUrl: 'Adresse kopieren',
+  copyPath: 'Pfad kopieren',
+  explorer: 'Im Explorer öffnen',
+  openFolder: 'Ordner öffnen',
+  urlCopied: 'Adresse kopiert.',
+  pathCopied: 'Pfad kopiert.',
+  openFailed: err => `Ordner ließ sich nicht öffnen: ${err}`,
+}
+
+const infoEn: InfoTexts = {
+  button: 'ⓘ Lanes',
+  title: 'Lanes of this project',
+  tipHint: 'Links and more: button “ⓘ Lanes”',
+  colTips: [
+    'GitHub: the branches in the GitHub repositories (as of the last fetch)',
+    'PC: the local branches on this PC',
+    'Folder: the worktrees of this repository and what is checked out there',
+    'Releases: releases and betas in the project’s GitHub repositories',
+  ],
+  isPrivate: 'private',
+  isPublic: 'public',
+  remoteBranch: (b, repo) => `branch ${b} in ${repo}`,
+  mainBranchGitHub: 'main branch',
+  goneRemote: 'no longer on GitHub (as of the last fetch)',
+  lastPushed: w => `last pushed from here: ${w}`,
+  lastFetched: w => `last fetched: ${w}`,
+  localCounterpart: b => `local branch: ${b}`,
+  branchMain: 'main branch on this PC',
+  branchDev: 'local branch on this PC',
+  upstream: u => `upstream ${u}`,
+  forRepo: repo => `pushed to the repository ${repo}`,
+  neverPushed: 'never pushed',
+  localOnly: 'only on this PC',
+  ahead: n => `${n} not pushed`,
+  behind: n => `${n} not pulled`,
+  inSync: 'everything pushed',
+  merged: m => `merged into ${m}`,
+  notMerged: m => `not merged into ${m} yet`,
+  inFolder: f => `checked out in ${f}`,
+  lastCommit: (s, w) => `last commit “${s}”, ${w}`,
+  deletedWhat: 'branches that no longer exist',
+  folderMain: 'main folder of the repository',
+  folderExtra: 'additional worktree',
+  onBranch: b => `on ${b}`,
+  detached: 'no branch (detached HEAD)',
+  dirty: n => `${n1(n, 'file', 'files')} changed, not committed`,
+  clean: 'everything committed',
+  formerWhat: 'folders that no longer exist – only in the Git log',
+  releasesCount: n => n1(n, 'release', 'releases'),
+  newest: (tag, beta, w) => `newest ${tag}${beta ? ' (beta)' : ''}, ${w}`,
+  openReleases: 'View releases',
+  openRepo: 'Repository on GitHub',
+  openBranch: 'Open on GitHub',
+  compare: m => `Compare with ${m}`,
+  copyUrl: 'Copy address',
+  copyPath: 'Copy path',
+  explorer: 'Open in Explorer',
+  openFolder: 'Open folder',
+  urlCopied: 'Address copied.',
+  pathCopied: 'Path copied.',
+  openFailed: err => `Could not open the folder: ${err}`,
 }
 
 export type ReleaseTexts = {
@@ -517,6 +681,7 @@ const de: Texts = {
     outsideSome: 'teils festgehalten aus gelöschtem Ordner',
   },
   rel: relDe,
+  info: infoDe,
   brief: {
     head: (d, mode) =>
       'Git-Tracking (Erweiterung des Nutzers) – ' +
@@ -787,6 +952,7 @@ const en: Texts = {
     outsideSome: 'partly committed from a deleted folder',
   },
   rel: relEn,
+  info: infoEn,
   brief: {
     head: (d, mode) =>
       "Git-Tracking (the user's mod) – " +

@@ -4,13 +4,20 @@ import type { TestBody } from 'claude-code/testing'
 import {
   branchesForOtherRepos,
   checkPrompt,
+  dropOtherProjects,
+  foreignOrigins,
+  gitConfigOrigin,
   guessRepos,
+  isOtherProject,
+  otherProjectRepos,
   parseCheckAnswer,
   parseGhReleases,
   parseRemotes,
   pickEvidence,
+  remoteGithubRepos,
   remoteRepoNames,
   withRemotes,
+  withVisibility,
 } from '../hooks/ablagen'
 import {
   diaryEvents,
@@ -20,11 +27,14 @@ import {
   mergedLane,
   parseMerges,
   releaseEvents,
+  releaseRepoLabel,
+  shortNames,
   withReleases,
 } from '../hooks/ebenen'
 import type { DiaryEvent } from '../hooks/ebenen'
 import { texts } from '../hooks/i18n'
 import { encodePowerShell, pickedFolder, pickerCommand } from '../hooks/ordnerwahl'
+import { spurInfos, spurTip, spurTips } from '../hooks/spuren'
 import type { DiaryEntry, GleisDiary } from '../types'
 
 const PANE = {
@@ -1231,4 +1241,256 @@ test('Gelöschte Zweige: eine graue Spur, ✕ nur ohne Übernahme, „festgehalt
   }
   // Nicht übernommen (nur noch als Ursprung von y bekannt): rotes ✕
   expect(drawing.rows[rowOf(e => e.kind === 'create' && e.branch === 'y')]!.svg).toContain(RED)
+})
+
+// ---------------------------------------------------------------- Spuren: Hinweise, Infobox, Ablagen anderer Projekte
+
+test('Ablagen anderer Projekte: Entwicklungsablage mit anderem Grundnamen und origin eines Nachbarordners fallen weg', () => {
+  // Wie bei einem Projekt mit Quellcode-Ablage, öffentlicher Ablage, einem eigenen Windows-Projekt und einem Archiv
+  const remotes = parseRemotes(
+    'origin\thttps://github.com/Tester/Uhr-App-Development.git (fetch)\norigin\thttps://github.com/Tester/Uhr-App-Development.git (push)\n' +
+      'public\thttps://github.com/Tester/Uhr-App.git (fetch)\npublic\tdisabled://nur-veroeffentlichen (push)\n',
+  )
+  const owned = [
+    { name: 'Uhr-App-Development', description: 'Quellcode', isPrivate: true, isArchived: false },
+    { name: 'Uhr-App', description: 'Downloads', isPrivate: false, isArchived: false },
+    { name: 'Uhr-App-Windows-Development', description: 'Uhr-App für Windows', isPrivate: true, isArchived: false },
+    { name: 'Uhr-App-Archive-20260913', description: 'Altes Archiv', isPrivate: true, isArchived: false },
+  ]
+  const show = (list: { name: string; role: string }[]) => list.map(r => `${r.name}:${r.role}`)
+  // Ohne Wissen über die Nachbarordner: „…-Windows-Development“ ist eine Entwicklungsablage mit anderem Grundnamen
+  expect(show(guessRepos(remotes, owned))).toEqual([
+    'Tester/Uhr-App-Development:code',
+    'Tester/Uhr-App:release',
+    'Tester/Uhr-App-Archive-20260913:other',
+  ])
+  expect(isOtherProject('Tester/Uhr-App-Windows-Development', 'Tester/Uhr-App-Development', [])).toBe(true)
+  expect(isOtherProject('Tester/Uhr-App-Development', 'Tester/Uhr-App-Development', ['Tester/Uhr-App-Development'])).toBe(false)
+
+  // Nachbarordner: deren origin aus .git/config; ein Klon dieses Projekts zählt nicht (sonst wäre Uhr-App „fremd“)
+  const cfgServer = '[core]\n\tbare = false\n[remote "origin"]\n\turl = https://github.com/Tester/Uhr-App-Server.git\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n'
+  const cfgClone = '[remote "public"]\n\turl = https://github.com/Tester/Uhr-App.git\n[remote "origin"]\n\turl = git@github.com:Tester/Uhr-App-Development.git\n'
+  expect(gitConfigOrigin(cfgServer)).toBe('Tester/Uhr-App-Server')
+  expect(gitConfigOrigin('[remote "upstream"]\n\turl = https://github.com/x/y.git\n')).toBeNull()
+  const foreign = foreignOrigins([cfgServer, cfgClone, '', '[remote "origin"]\n\turl = //nas/git/z.git\n'], 'Tester/Uhr-App-Development')
+  expect(foreign).toEqual(['Tester/Uhr-App-Server'])
+  const withServer = [...owned, { name: 'Uhr-App-Server', description: '', isPrivate: true, isArchived: false }]
+  expect(show(guessRepos(remotes, withServer, foreign))).not.toContain('Tester/Uhr-App-Server:other')
+  expect(otherProjectRepos(remotes, withServer, foreign)).toEqual(['Tester/Uhr-App-Windows-Development', 'Tester/Uhr-App-Server'])
+
+  // Claudes Antwort und eine früher gemerkte Liste: Ablagen anderer Projekte fallen weg, Gegenstellen bleiben immer
+  const answer = [
+    { name: 'Tester/Uhr-App-Development', role: 'code' as const, source: 'claude' as const, why: '' },
+    { name: 'Tester/Uhr-App', role: 'release' as const, source: 'claude' as const, why: '' },
+    { name: 'Tester/Uhr-App-Windows-Development', role: 'beta' as const, source: 'claude' as const, why: '' },
+  ]
+  expect(dropOtherProjects(answer, remotes, foreign).map(r => r.name)).toEqual(['Tester/Uhr-App-Development', 'Tester/Uhr-App'])
+  // Claude bekommt die fremden Ablagen ausdrücklich genannt
+  const q = checkPrompt({ project: 'Uhr-App', remotes, candidates: [], evidence: [], otherProjects: ['Tester/Uhr-App-Windows-Development'], lang: 'de' })
+  expect(q.prompt).toContain('source code of OTHER projects')
+  expect(q.prompt).toContain('- Tester/Uhr-App-Windows-Development')
+
+  // privat/öffentlich aus der Liste des Besitzers; Adressen der Gegenstellen für Links
+  const vis = withVisibility(guessRepos(remotes, owned), 'Tester', owned)
+  expect(vis.map(r => `${r.name.slice(7)}:${r.isPrivate}`)).toEqual(['Uhr-App-Development:true', 'Uhr-App:false', 'Uhr-App-Archive-20260913:true'])
+  expect(remoteGithubRepos('origin\thttps://github.com/Tester/Uhr-App-Development.git (fetch)\nnas\t//nas/git/x.git (fetch)\n')).toEqual({
+    origin: 'Tester/Uhr-App-Development',
+  })
+})
+
+test('Kurznamen im Kopf bleiben unterscheidbar, Ablagennamen in den Zeilen ohne gemeinsamen Anfang', () => {
+  // Gleich gekürzt („Weltraum-Spie…“): der längere zeigt den Teil, der sich unterscheidet
+  expect(shortNames(['Weltraum-Spiel-Lang', 'Weltraum-Spiel-Lang-Windows-Development', 'main'])).toEqual([
+    'Weltraum-Spie…',
+    '…Windows-Deve…',
+    'main',
+  ])
+  // Unterschied mitten im Wort: ab dem Wortanfang
+  expect(shortNames(['Weltraum-Spielplatz-A', 'Weltraum-Spielzeug-B'])).toEqual(['…Spielplatz-A', '…Spielzeug-B'])
+  // Keine Verwechslung möglich, oder gleiche Namen (dieselbe Ablage in zwei Spalten): wie bisher gekürzt
+  expect(shortNames(['Weltraum-Spiel-Lang', 'Weltraum-Spiel-Lang', 'Uhr-App-Development'])).toEqual([
+    'Weltraum-Spie…',
+    'Weltraum-Spie…',
+    'Uhr-App-Devel…',
+  ])
+  expect(releaseRepoLabel('Tester/Uhr-App-Windows-Development', 'Uhr-App')).toBe('…-Windows-Development')
+  expect(releaseRepoLabel('Tester/Uhr-App', 'Uhr-App')).toBe('Uhr-App')
+  expect(releaseRepoLabel('Tester/Uhr-AppX', 'Uhr-App')).toBe('Uhr-AppX')
+  expect(releaseRepoLabel('Tester/Uhr-App-Beta', null)).toBe('Uhr-App-Beta')
+})
+
+test('Spuren: Angaben je Spur, Hinweis im Kopf mit vollem Namen', () => {
+  const t = texts('de')
+  const en = (ref: string, hash: string, time: number, msg: string): DiaryEntry => ({ ref, hash, time, msg })
+  const diary: GleisDiary = {
+    entries: [
+      en('heads/main', 'm1', 100, 'commit (initial): Start'),
+      en('folder:0', 'm1', 100, 'commit (initial): Start'),
+      en('remotes/origin/main', 'm1', 110, 'update by push'),
+      en('heads/neue-wettervorhersage-anzeige', 'm1', 200, 'branch: Created from main'),
+      en('folder:1', 'm1', 200, 'checkout: moving from main to neue-wettervorhersage-anzeige'),
+      en('heads/neue-wettervorhersage-anzeige', 'w1', 300, 'commit: Wetter'),
+      en('folder:1', 'w1', 300, 'commit: Wetter'),
+      en('remotes/origin/neue-wettervorhersage-anzeige', 'w1', 310, 'update by push'),
+      en('remotes/public/main', 'p1', 320, 'fetch: fast-forward'),
+    ],
+    folders: [
+      { path: 'C:/Projekte/Uhr-App', name: 'Uhr-App', branch: 'main', isMain: true, dirty: 0 },
+      { path: 'C:/Projekte/Uhr-App/.claude/worktrees/wetter', name: 'wetter', branch: 'neue-wettervorhersage-anzeige', isMain: false, dirty: 2 },
+    ],
+    track: [
+      { branch: 'main', tip: 'm1', upstream: 'origin/main', ahead: 0, behind: 0 },
+      { branch: 'neue-wettervorhersage-anzeige', tip: 'w1', upstream: 'origin/neue-wettervorhersage-anzeige', ahead: 1, behind: 0 },
+    ],
+    remoteBranches: ['origin/main', 'origin/neue-wettervorhersage-anzeige', 'public/main'],
+    oldestCommit: 100,
+    mainRemote: 'origin/main',
+    remoteMerges: [],
+    unmergedRemote: ['origin/neue-wettervorhersage-anzeige'],
+    remoteNames: { origin: 'Uhr-App-Development', public: 'Uhr-App' },
+  }
+  const branches = ['main', 'neue-wettervorhersage-anzeige']
+  const items = [{ repo: 'Tester/Uhr-App', tag: 'v1.2.0', title: 'Uhr-App 1.2', kind: 'beta' as const, time: 250 }]
+  const evs = withReleases(diaryEvents(diary, branches), releaseEvents(items))
+  const model = ebenenModel(evs, diary, {
+    mainBranch: 'main',
+    branches,
+    current: 'main',
+    unmerged: ['neue-wettervorhersage-anzeige'],
+    limit: 60,
+    compact: false,
+    t,
+  })
+  const infos = spurInfos({
+    lanes: model.lanes,
+    diary,
+    mainBranch: 'main',
+    unmerged: ['neue-wettervorhersage-anzeige'],
+    otherRepoBranches: {},
+    remoteRepos: { origin: 'Tester/Uhr-App-Development', public: 'Tester/Uhr-App' },
+    commits: [{ hash: 'w1', parents: ['m1'], refs: [], subject: 'Wetter', author: 'Tester', time: 300 }],
+    unpushed: ['w1'],
+    hasRemotes: true,
+    repos: [
+      { name: 'Tester/Uhr-App-Development', role: 'code', source: 'git', why: '', isPrivate: true },
+      { name: 'Tester/Uhr-App', role: 'release', source: 'git', why: '', isPrivate: false },
+    ],
+    releases: items,
+    now: 1_000_000,
+    t,
+  })
+  // Reihenfolge wie in der Zeichnung: Veröffentlicht, GitHub, PC, Ordner
+  const rank = (c: number) => [3, 0, 1, 2].indexOf(c)
+  expect(infos.every((x, k) => k === 0 || rank(infos[k - 1]!.col) <= rank(x.col))).toBe(true)
+  const by = (key: string) => infos.find(x => x.key === key)!
+  const rel = by('v:Tester/Uhr-App')
+  expect(rel.what).toBe('Tester/Uhr-App · Veröffentlichungen · öffentlich')
+  expect(rel.facts[0]).toBe('1 Veröffentlichung')
+  expect(rel.facts[1]!.startsWith('neueste v1.2.0 (Beta), ')).toBe(true)
+  expect(rel.links.map(l => l.href)).toEqual(['https://github.com/Tester/Uhr-App/releases', 'https://github.com/Tester/Uhr-App'])
+  const ghMain = by('r:origin/main')
+  expect(ghMain.what).toBe('Zweig main der Ablage Tester/Uhr-App-Development · privat')
+  expect(ghMain.facts).toContain('Hauptzweig')
+  expect(ghMain.links[0]!.href).toBe('https://github.com/Tester/Uhr-App-Development/tree/main')
+  const ghFeat = by('r:origin/neue-wettervorhersage-anzeige')
+  expect(ghFeat.facts).toContain('noch nicht in main zusammengeführt')
+  expect(ghFeat.links.map(l => l.href)).toEqual([
+    'https://github.com/Tester/Uhr-App-Development/tree/neue-wettervorhersage-anzeige',
+    'https://github.com/Tester/Uhr-App-Development/compare/main...neue-wettervorhersage-anzeige',
+  ])
+  expect(by('r:public/main').what).toBe('Zweig main der Ablage Tester/Uhr-App · öffentlich')
+  const pcFeat = by('b:neue-wettervorhersage-anzeige')
+  expect(pcFeat.what).toBe('Entwicklungszweig auf diesem PC')
+  expect(pcFeat.facts.slice(0, 4)).toEqual([
+    'Gegenstück origin/neue-wettervorhersage-anzeige',
+    '1 noch nicht hochgeladen',
+    'noch nicht in main zusammengeführt',
+    'steht im Ordner wetter',
+  ])
+  expect(pcFeat.facts[4]!.startsWith('letzter Speicherstand „Wetter“, ')).toBe(true)
+  const folder = by('f:1')
+  expect(folder.path).toBe('C:/Projekte/Uhr-App/.claude/worktrees/wetter')
+  expect(folder.facts).toEqual(['steht auf neue-wettervorhersage-anzeige', '2 Dateien geändert, noch nicht festgehalten'])
+  expect(spurTip(folder, t).split('\n')).toEqual([
+    'wetter',
+    'Ordner · zusätzliches Arbeitsverzeichnis',
+    'steht auf neue-wettervorhersage-anzeige',
+    '2 Dateien geändert, noch nicht festgehalten',
+    'C:/Projekte/Uhr-App/.claude/worktrees/wetter',
+    'Links und mehr: Knopf „ⓘ Spuren“',
+  ])
+
+  // Im Kopf: gekürzter Name, Hinweis mit dem vollen Namen, Hinweise auch auf den Spaltentiteln
+  const drawing = ebenenSlices(model, { status: new Map(), selectedRow: null, mainBranch: 'main', t, tips: spurTips(infos, t) })
+  expect(drawing.header.svg).toContain('>neue-wettervo…<')
+  expect(drawing.header.svg).toContain('<title>neue-wettervorhersage-anzeige\nPC · Entwicklungszweig auf diesem PC')
+  expect(drawing.header.svg).toContain('<title>GitHub: die Zweige in den GitHub-Ablagen (Stand des letzten Abholens)</title>')
+  expect(drawing.header.svg).toContain('.ln:hover .hit{fill-opacity:.16}')
+})
+
+test('Infobox „Spuren“: aufklappen, Links, Adresse kopieren, Ordner im Explorer öffnen', { options: { language: 'de' } }, async ($, on) => {
+  mock.clock(on)
+  const calls: string[] = []
+  const copied: string[] = []
+  on('command.register', () => ({ value: { command: 'git-tracking' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [] }))
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined }
+  })
+  on('ui.copy', (_, e) => {
+    copied.push(e.text)
+    return { value: { isCopied: true as const } }
+  })
+  on('session.cwd', () => ({ value: 'C:/Projekte/Demo' }))
+  on('session.surfaces', () => ({ value: ['desktop'] }))
+  on('session.info', () => ({ value: { platform: 'windows', transcriptPath: 'C:/t.jsonl' } as never }))
+  on('process.run', (_, e) => {
+    calls.push(e.argv.join(' '))
+    // explorer.exe meldet auch bei Erfolg 1
+    if (e.argv[0] === 'explorer.exe') return { value: run('', 1) }
+    const args = e.argv.slice(e.argv.indexOf('color.ui=never') + 1)
+    if (args[0] === 'remote' && args.includes('-v')) return { value: run(REMOTES_V) }
+    return { value: answerGit(e.argv) }
+  })
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('command.run', () => ({ text: '' }))
+  await $.session.start({ cwd: 'C:/Projekte/Demo', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'git-tracking', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } })
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 100 }, surface: 'desktop' })
+  const all = async () =>
+    [...(await ui.findAll({ type: 'Text' })), ...(await ui.findAll({ type: 'Button' }))].map(x => x.text).join(' | ')
+  let shown = await all()
+  for (let i = 0; i < 20 && !shown.includes('Jetzt'); i++) shown = await all()
+
+  // Der Kopf ist bedienbar gezeichnet und trägt die Hinweise
+  const head = (await ui.findAll({ type: 'Svg' })).find(s => String(s.props.source).includes('<title>'))!
+  expect(head.props.isInteractive).toBe(true)
+  expect(String(head.props.source)).toContain('<title>main\nGitHub · Zweig main der Ablage Tester/Demo')
+  expect(await ui.find({ key: 'spuren-box' })).toBeUndefined()
+
+  await ui.press({ key: 'spuren' })
+  shown = await all()
+  expect(shown).toContain('Spuren dieses Projekts')
+  expect(shown).toContain('Hauptzweig auf diesem PC')
+  expect(shown).toContain('Gegenstück origin/main · 2 noch nicht hochgeladen · 1 noch nicht abgeholt')
+  expect(shown).toContain('C:/Projekte/Demo')
+  const links = (await ui.findAll({ type: 'Link' })).map(l => String(l.props.href))
+  expect(links).toContain('https://github.com/Tester/Demo/tree/main')
+  expect(links).toContain('https://github.com/Tester/Demo/compare/main...feature')
+
+  await ui.press({ key: 'spur-adresse-r:origin/main' })
+  expect(copied).toEqual(['https://github.com/Tester/Demo/tree/main'])
+  expect(toasts).toContain('Adresse kopiert.')
+  await ui.press({ key: 'spur-pfad-f:0' })
+  expect(copied[1]).toBe('C:/Projekte/Demo')
+  expect((await ui.find({ key: 'spur-oeffnen-f:0' }))!.props.label).toBe('Im Explorer öffnen')
+  await ui.press({ key: 'spur-oeffnen-f:0' })
+  expect(calls).toContain('explorer.exe C:\\Projekte\\Demo')
+
+  await ui.press({ key: 'spuren-schliessen' })
+  expect(await ui.find({ key: 'spuren-box' })).toBeUndefined()
+  await ui.unmount()
 })

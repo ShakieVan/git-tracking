@@ -729,6 +729,8 @@ const COLS = [COL_GH, COL_PC, COL_ORD, COL_REL]
 const BANDS = ['rgba(59,142,234,0.08)', 'rgba(224,160,40,0.09)', 'rgba(95,168,58,0.09)', 'rgba(138,99,210,0.10)']
 const FONT = "font-family=\"Segoe UI, system-ui, sans-serif\""
 const CSS = '.st{fill:#ffffff}@media (prefers-color-scheme: dark){.st{fill:#1f2328}}'
+/** Im Kopf: die Fläche hinter einem Spurnamen leuchtet unter dem Mauszeiger leicht auf */
+const HOVER_CSS = '.ln .hit{transition:fill-opacity .12s}.ln:hover .hit{fill-opacity:.16}'
 
 const H_NOW = 32
 const H_EVENT = 36
@@ -748,10 +750,61 @@ export type DrawOptions = {
   selectedRow: number | null
   mainBranch: string | null
   t: Texts
+  /**
+   * Hinweis beim Darüberfahren über einen Spurnamen: Spur → Text (Zeilen mit \n), „deleted“ für die
+   * gemeinsame Spur der gelöschten Zweige. Wirkt nur, wenn der Kopf als bedienbare Grafik gezeigt wird.
+   */
+  tips?: Map<string, string>
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 const cut = (s: string, n: number) => ([...s].length <= n ? s : [...s].slice(0, n - 1).join('') + '…')
+const SEPS = '-_./ '
+
+/** Länge des gemeinsamen Anfangs zweier Namen (ohne Rücksicht auf Groß-/Kleinschreibung) */
+function commonStart(a: string, b: string): number {
+  const x = a.toLowerCase()
+  const y = b.toLowerCase()
+  let k = 0
+  while (k < x.length && k < y.length && x[k] === y[k]) k++
+  return k
+}
+
+/**
+ * Kürzt Spurnamen auf `n` Zeichen so, dass sie unterscheidbar bleiben: Würden zwei lange Namen
+ * gleich gekürzt („Spiel-Relea…“), zeigt der längere statt des gemeinsamen Anfangs den Teil,
+ * der sich unterscheidet („…Windows-Dev…“). Gleiche Namen bleiben gleich.
+ */
+export function shortNames(names: string[], n = 14): string[] {
+  const cuts = names.map(s => cut(s, n))
+  return names.map((s, i) => {
+    if ([...s].length <= n) return s
+    const rivals = names.filter((o, j) => j !== i && o.toLowerCase() !== s.toLowerCase() && cuts[j] === cuts[i])
+    if (rivals.length === 0) return cuts[i]!
+    const p = Math.max(...rivals.map(o => commonStart(s, o)))
+    if (p >= s.length) return cuts[i]!
+    // Am Wortanfang beginnen: hinter dem letzten Trennzeichen im gemeinsamen Stück
+    let start = p
+    if (!SEPS.includes(s[p]!)) {
+      const k = Math.max(...[...SEPS].map(c => s.slice(0, p).lastIndexOf(c)))
+      if (k >= 0) start = k + 1
+    }
+    const tail = s.slice(start).replace(/^[-_./ ]+/, '')
+    return tail ? cut(`…${tail}`, n) : cuts[i]!
+  })
+}
+
+/**
+ * Name einer Ablage in den Zeilen der Ebene „Veröffentlicht“: Beginnt er mit dem Grundnamen des
+ * Projekts und geht weiter, wird der gemeinsame Anfang weggelassen („…-Windows-Development“),
+ * sonst der volle Name. So bleiben zwei lange Ablagen auch im schmalen Fenster unterscheidbar.
+ */
+export function releaseRepoLabel(repo: string, projectBase: string | null | undefined): string {
+  const name = repo.slice(repo.indexOf('/') + 1)
+  if (!projectBase) return name
+  const rest = name.slice(projectBase.length)
+  return name.toLowerCase().startsWith(projectBase.toLowerCase()) && rest.length > 1 && SEPS.includes(rest[0]!) ? `…${rest}` : name
+}
 
 /** Zerlegt die Drei-Ebenen-Ansicht in Zeilen-Grafiken, die nahtlos aneinander passen */
 export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawing {
@@ -786,8 +839,8 @@ export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawin
   const width = Math.ceil(x + 2)
   const X = (key: string | null) => (key ? xs.get(key) : undefined)
 
-  const frame = (h: number, body: string) =>
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${h}" viewBox="0 0 ${width} ${h}" ${FONT}><style>${CSS}</style>` +
+  const frame = (h: number, body: string, css = '') =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${h}" viewBox="0 0 ${width} ${h}" ${FONT}><style>${CSS}${css}</style>` +
     order.map(c => `<rect x="${colStart[c]}" y="0" width="${colW[c]}" height="${h}" fill="${BANDS[c]}"/>`).join('') +
     order
       .slice(1)
@@ -802,22 +855,27 @@ export function ebenenSlices(model: EbenenModel, opt: DrawOptions): EbenenDrawin
   // Kopf: Spaltennamen und senkrechte Spurnamen
   // Gelöschte Zweige stehen nicht einzeln im Kopf, sondern einmal als „gelöscht“
   const named = model.lanes.filter(l => !l.deleted)
-  const names = named.map(l => cut(l.name, 14))
+  const names = shortNames(named.map(l => l.name))
   if (deletedX !== null) names.push(opt.t.deletedLane)
   const longest = Math.max(4, ...names.map(n => [...n].length))
   const headH = Math.ceil((22 + longest * 6.4 + 6) / 4) * 4
+  /** Hinweis beim Darüberfahren (SVG-Element title); ohne Text nichts */
+  const tip = (text: string | undefined) => (text ? `<title>${esc(text)}</title>` : '')
   const titles = order
     .map(
       c =>
-        `<text x="${colStart[c]! + colW[c]! / 2}" y="13" text-anchor="middle" font-size="11.5" font-weight="600" fill="${COLS[c]}">${esc(opt.t.levelTitles[c] ?? '')}</text>`,
+        `<g>${tip(opt.t.info.colTips[c])}<text x="${colStart[c]! + colW[c]! / 2}" y="13" text-anchor="middle" font-size="11.5" font-weight="600" fill="${COLS[c]}">${esc(opt.t.levelTitles[c] ?? '')}</text></g>`,
     )
     .join('')
-  const laneName = (lx: number, color: string, name: string) =>
-    `<text transform="translate(${lx + 4} ${headH - 4}) rotate(-90)" font-size="11" fill="${color}">${esc(name)}</text>`
+  // Jeder Spurname mit einer unsichtbaren Fläche über die ganze Kopfhöhe, damit der Hinweis leicht zu treffen ist;
+  // unter dem Mauszeiger leuchtet sie leicht auf (nur in der bedienbaren Grafik)
+  const laneName = (key: string, lx: number, color: string, name: string) =>
+    `<g class="ln">${tip(opt.tips?.get(key))}<rect class="hit" x="${lx - LANE / 2}" y="18" width="${LANE}" height="${headH - 18}" rx="3" fill="${color}" fill-opacity="0"/>` +
+    `<text transform="translate(${lx + 4} ${headH - 4}) rotate(-90)" font-size="11" fill="${color}">${esc(name)}</text></g>`
   const laneNames =
-    named.map((l, i) => laneName(xs.get(l.key)!, l.key === 'f:-1' ? GREY : COLS[l.col]!, names[i]!)).join('') +
-    (deletedX !== null ? laneName(deletedX, GREY, opt.t.deletedLane) : '')
-  const header = { svg: frame(headH, titles + laneNames), height: headH }
+    named.map((l, i) => laneName(l.key, xs.get(l.key)!, l.key === 'f:-1' ? GREY : COLS[l.col]!, names[i]!)).join('') +
+    (deletedX !== null ? laneName('deleted', deletedX, GREY, opt.t.deletedLane) : '')
+  const header = { svg: frame(headH, titles + laneNames, HOVER_CSS), height: headH }
 
   const line = (x1: number, y1: number, x2: number, y2: number, color: string, extra = '') =>
     `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}" stroke-width="3" stroke-linecap="butt" ${extra}/>`
@@ -1019,6 +1077,8 @@ export function eventLines(
   t: Texts,
   /** GitHub-Ablage je Gegenstelle, für Hochladen in eine andere Ablage als origin */
   remoteNames?: Record<string, string>,
+  /** Grundname des Projekts (Spiel aus Spiel-Development): kürzt die Ablagennamen der Veröffentlichungen */
+  projectBase?: string | null,
 ): { title: string; detail: string } {
   const e = t.ev
   const b = ev.branch ?? e.noBranch
@@ -1088,7 +1148,7 @@ export function eventLines(
       if (!rel) return { title: ev.subject, detail: '' }
       return {
         title: rel.beta ? e.betaPublished(rel.tag) : e.published(rel.tag),
-        detail: rel.repo.slice(rel.repo.indexOf('/') + 1),
+        detail: releaseRepoLabel(rel.repo, projectBase),
       }
     }
     case 'other':

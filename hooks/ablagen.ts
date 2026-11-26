@@ -47,6 +47,26 @@ export function remoteRepoNames(out: string): Record<string, string> {
   return names
 }
 
+/** Gegenstelle → owner/repo, nur für Gegenstellen, die zu GitHub zeigen (für Links auf github.com) */
+export function remoteGithubRepos(out: string): Record<string, string> {
+  const repos: Record<string, string> = {}
+  for (const line of out.replace(/\r/g, '').split('\n')) {
+    const m = /^(\S+)\s+(\S+)\s+\(fetch\)$/.exec(line.trim())
+    const gh = m ? parseGithubUrl(m[2]!) : null
+    if (m && gh) repos[m[1]!] = gh
+  }
+  return repos
+}
+
+/** Trägt privat/öffentlich aus der Liste des Besitzers ein; Ablagen, die dort fehlen, bleiben unbekannt */
+export function withVisibility(repos: ProjectRepo[], owner: string, owned: OwnerRepo[] | null): ProjectRepo[] {
+  if (!owned) return repos
+  return repos.map(r => {
+    const found = owned.find(o => sameRepo(`${owner}/${o.name}`, r.name))
+    return found ? { ...r, isPrivate: found.isPrivate } : r
+  })
+}
+
 /**
  * Lokale Zweige, die in eine andere GitHub-Ablage als origin gehen (z. B. „oeffentlich“ → git-tracking):
  * eingetragen als Gegenstück, oder sie stehen auf demselben Speicherstand wie ein Zweig dort.
@@ -92,10 +112,61 @@ export function roleFromName(repo: string, base: string): RepoRole {
 }
 
 /**
- * Die Vermutung ohne Claude: die GitHub-Gegenstellen in Git, dazu Ablagen desselben
- * Besitzers mit passendem Namen (Spiel → Spiel-Beta, Uhr-App-Development → Uhr-App).
+ * Gehört die Ablage zu einem anderen Projekt? Ja, wenn sie die Quellcode-Ablage (origin) eines
+ * Nachbarordners ist, oder wenn sie wie eine Entwicklungsablage heißt („…-Development“), aber einen
+ * anderen Grundnamen hat (Uhr-App-Windows-Development gehört nicht zu Uhr-App-Development).
+ * `foreign` = owner/repo der origins der Nachbarordner (ohne Klone dieses Projekts).
  */
-export function guessRepos(remotes: Remote[], owned: OwnerRepo[] | null): ProjectRepo[] {
+export function isOtherProject(name: string, mainName: string, foreign: readonly string[]): boolean {
+  if (sameRepo(name, mainName)) return false
+  if (foreign.some(f => sameRepo(f, name))) return true
+  const repo = name.slice(name.indexOf('/') + 1)
+  const mainRepo = mainName.slice(mainName.indexOf('/') + 1)
+  return DEV_SUFFIX.test(repo) && baseOf(repo).toLowerCase() !== baseOf(mainRepo).toLowerCase()
+}
+
+/** Lässt Ablagen anderer Projekte weg (auch aus Claudes Antwort und gemerkten Listen); Gegenstellen aus Git bleiben immer */
+export function dropOtherProjects(repos: ProjectRepo[], remotes: Remote[], foreign: readonly string[]): ProjectRepo[] {
+  const main = remotes[0]
+  if (!main) return repos
+  return repos.filter(r => remotes.some(x => sameRepo(x.name, r.name)) || !isOtherProject(r.name, main.name, foreign))
+}
+
+/**
+ * Die origins der Git-Ordner neben dem Projekt aus deren `.git/config` (owner/repo). Ordner mit
+ * derselben origin wie das Projekt (Klone davon) zählen nicht, sonst würde eine zweite Ablage
+ * des Projekts in so einem Klon als „fremd“ gelten.
+ */
+export function foreignOrigins(configs: string[], mainName: string): string[] {
+  const out: string[] = []
+  for (const text of configs) {
+    const origin = gitConfigOrigin(text)
+    if (origin && !sameRepo(origin, mainName) && !out.some(o => sameRepo(o, origin))) out.push(origin)
+  }
+  return out
+}
+
+/** owner/repo der Gegenstelle origin aus dem Text einer `.git/config`; null ohne GitHub-origin */
+export function gitConfigOrigin(text: string): string | null {
+  let inOrigin = false
+  for (const raw of text.replace(/\r/g, '').split('\n')) {
+    const line = raw.trim()
+    if (line.startsWith('[')) {
+      inOrigin = /^\[remote\s+"origin"\]$/.test(line)
+      continue
+    }
+    const m = inOrigin ? /^url\s*=\s*(\S+)$/.exec(line) : null
+    if (m) return parseGithubUrl(m[1]!)
+  }
+  return null
+}
+
+/**
+ * Die Vermutung ohne Claude: die GitHub-Gegenstellen in Git, dazu Ablagen desselben
+ * Besitzers mit passendem Namen (Spiel → Spiel-Beta, Uhr-App-Development → Uhr-App),
+ * ohne die Ablagen anderer Projekte (isOtherProject).
+ */
+export function guessRepos(remotes: Remote[], owned: OwnerRepo[] | null, foreign: readonly string[] = []): ProjectRepo[] {
   const out: ProjectRepo[] = remotes.map((r, i) => ({
     name: r.name,
     role: i === 0 ? 'code' : RELEASE_WORDS.test(r.remote) ? 'release' : 'other',
@@ -108,12 +179,28 @@ export function guessRepos(remotes: Remote[], owned: OwnerRepo[] | null): Projec
   const base = baseOf(repo).toLowerCase()
   for (const o of owned) {
     const n = o.name.toLowerCase()
-    if (o.isArchived || out.some(x => sameRepo(x.name, `${owner}/${o.name}`))) continue
+    const full = `${owner}/${o.name}`
+    if (o.isArchived || out.some(x => sameRepo(x.name, full))) continue
     const rest = n.slice(base.length)
     if (!n.startsWith(base) || (rest !== '' && !/^[-_.]/.test(rest))) continue
-    out.push({ name: `${owner}/${o.name}`, role: roleFromName(n, base), source: 'name', why: cut(o.description, 160) })
+    if (isOtherProject(full, main.name, foreign)) continue
+    out.push({ name: full, role: roleFromName(n, base), source: 'name', why: cut(o.description, 160) })
   }
   return out
+}
+
+/**
+ * Die Ablagen mit ähnlichem Namen, die zu einem anderen Projekt gehören (für Claudes Prüfung:
+ * „diese nicht dazunehmen“).
+ */
+export function otherProjectRepos(remotes: Remote[], owned: OwnerRepo[] | null, foreign: readonly string[]): string[] {
+  const main = remotes[0]
+  if (!main || !owned) return []
+  const [owner, repo] = main.name.split('/') as [string, string]
+  const base = baseOf(repo).toLowerCase()
+  return owned
+    .map(o => `${owner}/${o.name}`)
+    .filter(full => full.toLowerCase().slice(owner.length + 1).startsWith(base) && isOtherProject(full, main.name, foreign))
 }
 
 /** Stellt sicher, dass jede Gegenstelle aus Git in der Liste steht (die Haupt-Ablage als Quellcode) */
@@ -169,6 +256,8 @@ export type CheckInput = {
   candidates: ProjectRepo[]
   /** Zeilen aus den Projektdateien, die Ablagen nennen */
   evidence: string[]
+  /** Ablagen mit ähnlichem Namen, die die Quellcode-Ablage eines anderen Projekts sind */
+  otherProjects?: string[]
   lang: 'de' | 'en'
 }
 
@@ -199,6 +288,13 @@ export function checkPrompt(p: CheckInput): { system: string; prompt: string } {
     '',
     `Lines in the project's files that name repositories of ${owner || 'this owner'} (file:line: text):`,
     ...(p.evidence.length > 0 ? p.evidence : ['- none found']),
+    ...(p.otherProjects && p.otherProjects.length > 0
+      ? [
+          '',
+          'These repositories are the source code of OTHER projects (a separate project folder on this computer, or a development repository of another product). Leave them out:',
+          ...p.otherProjects.map(n => `- ${n}`),
+        ]
+      : []),
   ].join('\n')
   return { system, prompt }
 }
